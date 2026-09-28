@@ -353,21 +353,21 @@ Report akhir wajib memisahkan code implemented, local verified, server verified,
 ## 16. Definition of done yang jujur
 
 ### Closure engineering untuk private paper MVP
-- [ ] R0 baseline dan scope jelas.
-- [ ] R1 semantic HTTPS UI termasuk populated legacy/new rows lulus.
-- [ ] R2 unknown/zero semantics dan non-mutation lulus.
-- [ ] R3 failure, slow scan cadence, state boundary, in-flight shutdown lulus.
-- [ ] R4 version persistence dan recreate normal lulus.
-- [ ] R5 isolated application restore lulus.
-- [ ] R6 exact artifact/server verification dan rollback siap.
-- [ ] Docs/memory dikoreksi; tidak ada completion claim tanpa bukti.
+- [x] R0 baseline dan scope jelas.
+- [x] R1 semantic HTTPS UI termasuk populated legacy/new rows lulus.
+- [x] R2 unknown/zero semantics dan non-mutation lulus.
+- [x] R3 failure, slow scan cadence, state boundary, in-flight shutdown lulus.
+- [x] R4 version persistence dan recreate normal lulus.
+- [x] R5 isolated application restore lulus.
+- [x] R6 exact artifact/server verification dan rollback siap.
+- [x] Docs/memory dikoreksi; tidak ada completion claim tanpa bukti.
 
 ### Stability/research terpisah
-- [ ] R7 soak selesai sesuai durasi nyata.
-- [ ] Quant research Phase 0.5 menghasilkan evidence yang reproducible, termasuk kemungkinan hasil negatif.
-- [ ] Learning governance diterapkan hanya setelah evidence memadai.
+- [ ] R7 soak selesai sesuai durasi nyata — observer dan automatic finalizer aktif; hasil belum tersedia sebelum 24 jam nyata.
+- [ ] Quant research Phase 0.5 menghasilkan evidence yang reproducible, termasuk kemungkinan hasil negatif — blocked by missing chronological point-in-time dataset.
+- [ ] Learning governance diterapkan hanya setelah evidence memadai — correctly not activated.
 
-Seluruh checkbox awalnya terbuka. Penulisan dokumen ini tidak menutup task implementasi apa pun.
+Engineering closure R0–R6 sudah memiliki acceptance packet di `docs/ACCEPTANCE_PACKET_2026-09-28.md`. R7 dan Phase 0.5 tetap terbuka karena membutuhkan waktu/data nyata, bukan karena pekerjaan lupa dijalankan.
 
 ## 17. Prompt siap kirim ke Luna
 
