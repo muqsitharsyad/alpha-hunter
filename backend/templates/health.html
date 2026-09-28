@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}System Health{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>System Health</h1>
+  <span class="muted" style="font-size:12px">providers, feeds, brakes and the audit trail</span>
+</div>
+
+{% if stale %}
+<div class="notice warn">
+  {{ stale | length }} provider(s) not healthy. A decision critical outage pauses entries rather than trading blind.
+</div>
+{% endif %}
+
+<div class="metrics">
+  <div class="metric"><div class="metric-label">Bot state</div><div class="metric-value" style="font-size:16px">{{ bot.status }}</div><div class="metric-note">{% if bot.emergency_active %}brake active{% else %}no brake{% endif %}</div></div>
+  <div class="metric"><div class="metric-label">Data cost today</div><div class="metric-value num">${{ cost_day | money(4) }}</div><div class="metric-note">budget ${{ cost_budget | money(2) }} per day</div></div>
+  <div class="metric"><div class="metric-label">Cache entries</div><div class="metric-value num">{{ cache.entries }}</div><div class="metric-note">hit rate {{ (cache.hit_rate * 100) | money(1) }}%</div></div>
+  <div class="metric"><div class="metric-label">Feed TTL</div><div class="metric-value num">{{ ttl_market }}s</div><div class="metric-note">pool list {{ ttl_pool }}s, scan {{ scan_interval }}s</div></div>
+</div>
+
+<div class="card">
+  <div class="card-head"><h2>Providers</h2></div>
+  {% if providers %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Provider</th><th>Status</th><th class="num">Calls</th><th class="num">Errors</th><th class="num">Error rate 5m</th><th class="num">p95 ms</th><th>Last success</th></tr></thead>
+      <tbody>
+      {% for p in providers %}
+        <tr>
+          <td class="num">{{ p.provider }}</td>
+          <td><span class="chip {{ 'buy' if p.status == 'healthy' else ('reject' if p.status == 'degraded' else '') }}">{{ p.status }}</span></td>
+          <td class="num">{{ p.calls }}</td>
+          <td class="num">{{ p.errors }}</td>
+          <td class="num">{{ (p.error_rate_5m * 100) | money(1) }}%</td>
+          <td class="num">{{ p.latency_ms_p95 | money(0) }}</td>
+          <td class="muted nowrap">{{ p.last_success.strftime('%H:%M:%S') if p.last_success else '-' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty"><strong>No provider calls recorded yet</strong>
+    Health is written after the first scan cycle.</div>
+  {% endif %}
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <div class="card-head"><h2>Risk events</h2></div>
+    {% if risk %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Type</th><th>Severity</th><th>Detail</th><th>When</th></tr></thead>
+        <tbody>
+        {% for r in risk %}
+          <tr>
+            <td><span class="chip">{{ r.type }}</span></td>
+            <td class="{{ 'neg' if r.severity == 'critical' else 'muted' }}">{{ r.severity }}</td>
+            <td class="muted" style="font-size:12px">{{ r.details.detail if r.details else '-' }}</td>
+            <td class="muted nowrap">{{ r.timestamp.strftime('%m-%d %H:%M') }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty"><strong>No risk events</strong>
+      A daily loss breach, drawdown breach, provider outage, stale feed or crash regime raises one.</div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Audit trail</h2></div>
+    {% if audit %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Action</th><th>Entity</th><th>Actor</th><th>When</th></tr></thead>
+        <tbody>
+        {% for a in audit %}
+          <tr>
+            <td><span class="chip">{{ a.action }}</span></td>
+            <td class="muted">{{ a.entity }} {{ a.entity_id }}</td>
+            <td class="muted">{{ a.actor_type }} {{ a.actor_id }}</td>
+            <td class="muted nowrap">{{ a.timestamp.strftime('%m-%d %H:%M:%S') }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty"><strong>No audit entries</strong>Bot start, stop, settings changes and every decision land here.</div>
+    {% endif %}
+  </div>
+</div>
+
+{% if bot.brakes %}
+<div class="card">
+  <div class="card-head"><h2>Active brakes</h2></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Type</th><th>Severity</th><th>Detail</th></tr></thead>
+      <tbody>
+      {% for b in bot.brakes %}
+        <tr>
+          <td><span class="chip reject">{{ b.type }}</span></td>
+          <td class="neg">{{ b.severity }}</td>
+          <td class="muted">{{ b.detail }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="muted" style="font-size:12px;margin-top:12px">
+    The brake blocks new entries while it is active. Open positions keep being managed and can be
+    closed at any time from the Closes all control in the header.
+  </p>
+</div>
+{% endif %}
+
+{% endblock %}

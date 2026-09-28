@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}Opportunities{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Opportunities</h1>
+  <span class="muted" style="font-size:12px">every evaluated candidate keeps its gates and reason</span>
+</div>
+
+<div class="card" style="padding:12px 16px">
+  <div class="form-actions">
+    <a class="btn" href="/app/opportunities" {% if not decision %}style="border-color:var(--accent)"{% endif %}>All</a>
+    <a class="btn" href="/app/opportunities?decision=BUY" {% if decision == 'BUY' %}style="border-color:var(--accent)"{% endif %}>BUY ({{ counts.BUY }})</a>
+    <a class="btn" href="/app/opportunities?decision=WATCH" {% if decision == 'WATCH' %}style="border-color:var(--accent)"{% endif %}>WATCH ({{ counts.WATCH }})</a>
+    <a class="btn" href="/app/opportunities?decision=IGNORE" {% if decision == 'IGNORE' %}style="border-color:var(--accent)"{% endif %}>IGNORE ({{ counts.IGNORE }})</a>
+  </div>
+</div>
+
+{% if detail %}
+{% set o = detail.opp %}
+<div class="card">
+  <div class="card-head">
+    <h2>{{ o.symbol }} · decision {{ o.decision }}</h2>
+    <a href="/app/opportunities" class="muted" style="font-size:12px">close</a>
+  </div>
+
+  <p class="explain">{{ o.explanation }}</p>
+
+  <div class="metrics" style="margin:16px 0">
+    <div class="metric"><div class="metric-label">Composite</div><div class="metric-value num">{{ o.score | money(2) }}</div><div class="metric-note">BUY at 85, WATCH at 70</div></div>
+    <div class="metric"><div class="metric-label">Regime</div><div class="metric-value" style="font-size:15px">{{ regime_label(o.regime) }}</div><div class="metric-note">at decision time</div></div>
+    <div class="metric"><div class="metric-label">Strategy</div><div class="metric-value num" style="font-size:14px">{{ o.strategy_version }}</div><div class="metric-note">feature hash {{ o.feature_hash }}</div></div>
+    <div class="metric"><div class="metric-label">Feasible size</div><div class="metric-value num">${{ (o.feasibility.get('our_size') if o.feasibility else None) | money(0) }}</div><div class="metric-note">slippage {{ (o.feasibility.get('slippage_bps') if o.feasibility else None) | money(0) }} bps</div></div>
+  </div>
+
+  <h3>Score components</h3>
+  {% set c = o.components %}
+  <div class="bars">
+    {% for key, label in [('smart_money','Smart money 30%'), ('consensus','Whale consensus 20%'), ('token_health','Token health 15%'), ('regime','Market regime 15%'), ('entry','Entry quality 10%'), ('narrative','Narrative 10%')] %}
+    <div class="bar-row">
+      <span class="muted">{{ label }}</span>
+      <span class="bar"><span style="width:{{ c.get(key, 0) if c.get(key, 0) <= 100 else 100 }}%"></span></span>
+      <span class="bar-val">{{ c.get(key, 0) }}</span>
+    </div>
+    {% endfor %}
+  </div>
+
+  <hr>
+  <h3>Hard gates</h3>
+  {% if o.gate_results %}
+    <dl class="kv">
+      <dt>All gates passed</dt><dd>{{ 'yes' if o.gate_results.passed else 'no' }}</dd>
+      <dt>Token safety</dt><dd>{{ o.gate_results.safety }}</dd>
+      <dt>Copy feasible</dt><dd>{{ 'yes' if o.gate_results.feasibility else 'no' }}</dd>
+      {% if o.gate_results.failures %}
+      <dt>Blocking</dt><dd>{{ o.gate_results.failures | join('; ') }}</dd>
+      {% endif %}
+      {% if o.gate_results.risk_failures %}
+      <dt>Risk</dt><dd>{{ o.gate_results.risk_failures | join('; ') }}</dd>
+      {% endif %}
+    </dl>
+  {% endif %}
+
+  {% if detail.evals %}
+  <hr>
+  <h3>Copy evaluations</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Feasible</th><th class="num">Slippage bps</th><th class="num">Signal age s</th><th>Reason</th></tr></thead>
+      <tbody>
+      {% for e in detail.evals %}
+        <tr>
+          <td><span class="chip {{ 'buy' if e.feasible else 'reject' }}">{{ 'yes' if e.feasible else 'no' }}</span></td>
+          <td class="num">{{ e.expected_slippage_bps | money(1) }}</td>
+          <td class="num">{{ e.signal_age_s | money(0) }}</td>
+          <td class="muted">{{ e.reason or 'within all limits' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if detail.flags %}
+  <hr>
+  <h3>Safety flags</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Flag</th><th>Severity</th><th>Evidence</th></tr></thead>
+      <tbody>
+      {% for f in detail.flags %}
+        <tr>
+          <td><span class="chip">{{ f.flag_type }}</span></td>
+          <td class="muted">{{ f.severity }}</td>
+          <td class="muted" style="font-size:12px">{{ f.evidence }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  <details style="margin-top:14px">
+    <summary>Input feature snapshot (reproducible)</summary>
+    <pre>{{ o.features }}</pre>
+  </details>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-head"><h2>Evaluated candidates</h2><span class="muted" style="font-size:12px">{{ rows | length }} shown</span></div>
+  {% if rows %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Symbol</th><th>Scanner</th><th class="num">Score</th><th>Decision</th>
+            <th class="num">Consensus</th><th class="num">Slippage bps</th><th>Blocked by</th><th>When</th></tr>
+      </thead>
+      <tbody>
+      {% for o in rows %}
+        <tr>
+          <td><a href="/app/opportunities?opp={{ o.id }}">{{ o.symbol }}</a></td>
+          <td><span class="chip">{{ o.scanner }}</span></td>
+          <td class="num">{{ o.score | money(1) }}</td>
+          <td><span class="chip {{ o.decision | lower }}">{{ o.decision }}</span></td>
+          <td class="num">{{ o.components.consensus if o.components else '-' }}</td>
+          <td class="num">{{ (o.feasibility.get('slippage_bps') if o.feasibility else None) | money(0) }}</td>
+          <td class="muted" style="font-size:12px">
+            {{ (o.gate_results.failures | join('; ')) if o.gate_results and o.gate_results.failures else 'none' }}
+          </td>
+          <td class="muted nowrap">{{ o.timestamp.strftime('%m-%d %H:%M') }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty">
+    <strong>No opportunities in this view</strong>
+    A candidate is only created when whale flow above the minimum size is detected in a scanned pool.
+    {% if bot.status != 'running' %}Press Start AI to begin scanning.{% endif %}
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}

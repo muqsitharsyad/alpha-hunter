@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Dashboard</h1>
+  <span class="loading" id="refresh-label">auto refresh {{ 30 }}s</span>
+</div>
+
+<div data-autorefresh="30"></div>
+
+<div class="metrics">
+  <div class="metric">
+    <div class="metric-label">Paper equity</div>
+    <div class="metric-value num">${{ equity | money }}</div>
+    <div class="metric-note">started at ${{ starting_equity | money }}</div>
+  </div>
+  <div class="metric">
+    <div class="metric-label">Today</div>
+    <div class="metric-value num {{ 'pos' if daily_pnl_pct > 0 else ('neg' if daily_pnl_pct < 0 else '') }}">
+      {{ daily_pnl_pct | pct }}
+    </div>
+    <div class="metric-note">daily loss cap {{ 5 }}%</div>
+  </div>
+  <div class="metric">
+    <div class="metric-label">Realized</div>
+    <div class="metric-value num {{ 'pos' if realized > 0 else ('neg' if realized < 0 else '') }}">
+      ${{ realized | money }}
+    </div>
+    <div class="metric-note">unrealized ${{ unrealized | money }}</div>
+  </div>
+  <div class="metric">
+    <div class="metric-label">Drawdown</div>
+    <div class="metric-value num">{{ drawdown_pct | money(1) }}%</div>
+    <div class="metric-note">cap 20%</div>
+  </div>
+  <div class="metric">
+    <div class="metric-label">Open positions</div>
+    <div class="metric-value num">{{ open_count }} / {{ max_positions }}</div>
+    <div class="metric-note">notional ${{ open_notional | money }}</div>
+  </div>
+  <div class="metric">
+    <div class="metric-label">Decision cycle</div>
+    <div class="metric-value num">{{ next_scan_s }}s</div>
+    <div class="metric-note">whale event to paper decision</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <h2>Open positions</h2>
+    <a href="/app/positions" class="muted" style="font-size:12px">position detail</a>
+  </div>
+  {% if positions %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Symbol</th><th>Entry</th><th>Mark</th><th>Unrealized</th>
+          <th>Stop</th><th class="num">Risk spine</th><th>TP progress</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for p in positions %}
+        {% set mark = p.last_price or p.avg_entry %}
+        {% set low = p.initial_stop %}
+        {% set span = (p.tp_levels[1].price - low) if p.tp_levels and p.tp_levels|length > 1 else (p.avg_entry * 1.2 - low) %}
+        {% set pct = ((mark - low) / span * 100) if span > 0 else 0 %}
+        <tr>
+          <td><a href="/app/positions">{{ p.symbol }}</a></td>
+          <td class="num">{{ '%.8g' % p.avg_entry }}</td>
+          <td class="num">{{ '%.8g' % mark }}</td>
+          <td class="num {{ 'pos' if mark > p.avg_entry else ('neg' if mark < p.avg_entry else '') }}">
+            {{ ((mark / p.avg_entry - 1) * 100) | pct }}
+          </td>
+          <td class="num">{{ '%.8g' % p.stop_loss }}</td>
+          <td>
+            <div class="spine" title="stop to TP2, white mark is current price">
+              <div class="spine-risk" style="width:{{ pct if pct < 100 else 100 }}%"></div>
+              <div class="spine-mark" style="left:{{ pct if pct < 100 else 100 }}%"></div>
+            </div>
+          </td>
+          <td class="nowrap">
+            {% for tp in p.tp_levels %}
+              <span class="chip {{ 'buy' if tp.done else '' }}">TP{{ tp.level }}{{ ' hit' if tp.done else '' }}</span>
+            {% endfor %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty">
+    <strong>No open positions</strong>
+    The bot opens a paper position only when a qualified whale signal passes every hard gate.
+    {% if bot.status != 'running' %}Press Start AI to begin scanning.{% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="grid-side">
+  <div class="card">
+    <div class="card-head">
+      <h2>Latest decisions</h2>
+      <a href="/app/opportunities" class="muted" style="font-size:12px">all opportunities</a>
+    </div>
+    {% if opps %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Symbol</th><th>Scanner</th><th class="num">Score</th><th>Decision</th><th>Why</th></tr></thead>
+        <tbody>
+        {% for o in opps %}
+          <tr>
+            <td><a href="/opportunities?opp={{ o.id }}">{{ o.symbol }}</a></td>
+            <td><span class="chip">{{ o.scanner }}</span></td>
+            <td class="num">{{ o.score | money(1) }}</td>
+            <td><span class="chip {{ o.decision | lower }}">{{ o.decision }}</span></td>
+            <td class="muted" style="font-size:12px">{{ (o.gate_results.failures | join('; ')) if o.gate_results and o.gate_results.failures else 'all hard gates passed' }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty">
+      <strong>No decisions yet</strong>
+      Decisions appear once a scan finds whale activity above the minimum trade size.
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <h2>Latest whale flows</h2>
+      <a href="/app/smart-money" class="muted" style="font-size:12px">smart money</a>
+    </div>
+    {% if flows %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Side</th><th class="num">Value</th><th class="num">Price</th><th>Age</th></tr></thead>
+        <tbody>
+        {% for f in flows %}
+          <tr>
+            <td><span class="chip {{ 'buy' if f.side == 'buy' else 'reject' }}">{{ f.side }}</span></td>
+            <td class="num">${{ f.value_usd | money(0) }}</td>
+            <td class="num">{{ '%.8g' % f.price_est }}</td>
+            <td class="muted nowrap">{{ f.timestamp.strftime('%H:%M') }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty">
+      <strong>No whale flows recorded</strong>
+      Swaps above the minimum whale size are written to the wallet ledger.
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <h2>Recent closed trades</h2>
+    <a href="/app/trades" class="muted" style="font-size:12px">full history</a>
+  </div>
+  {% if trades %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Symbol</th><th class="num">PnL</th><th class="num">%</th><th>Exit reason</th><th>Strategy</th><th>Closed</th></tr></thead>
+      <tbody>
+      {% for t in trades %}
+        <tr>
+          <td>{{ t.position.symbol if t.position else '-' }}</td>
+          <td class="num {{ 'pos' if t.pnl > 0 else ('neg' if t.pnl < 0 else '') }}">${{ t.pnl | money }}</td>
+          <td class="num {{ 'pos' if t.pnl_pct > 0 else ('neg' if t.pnl_pct < 0 else '') }}">{{ t.pnl_pct | pct }}</td>
+          <td><span class="chip">{{ t.exit_reason }}</span></td>
+          <td class="muted" style="font-size:12px">{{ t.strategy_version }}</td>
+          <td class="muted nowrap">{{ t.exit_time.strftime('%Y-%m-%d %H:%M') if t.exit_time else '-' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty">
+    <strong>No closed trades yet</strong>
+    Every exit records its reason, R multiple and duration for the learning loop.
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}

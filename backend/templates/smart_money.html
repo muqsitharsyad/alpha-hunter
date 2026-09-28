@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}Smart Money{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Smart Money</h1>
+  <span class="muted" style="font-size:12px">
+    wallets are discovered from on-chain flow, never supplied by hand
+  </span>
+</div>
+
+{% if detail %}
+<div class="card">
+  <div class="card-head">
+    <h2>Wallet {{ detail.wallet.address[:16] }}…</h2>
+    <a href="/app/smart-money" class="muted" style="font-size:12px">close</a>
+  </div>
+  <div class="metrics" style="margin-bottom:16px">
+    <div class="metric"><div class="metric-label">Score</div><div class="metric-value num">{{ detail.wallet.score | money(1) }}</div><div class="metric-note">tier {{ detail.wallet.tier }}</div></div>
+    <div class="metric"><div class="metric-label">Reputation</div><div class="metric-value num">{{ detail.wallet.reputation | money(1) }}</div><div class="metric-note">time decayed, 30d half life</div></div>
+    <div class="metric"><div class="metric-label">Archetype</div><div class="metric-value" style="font-size:15px">{{ detail.wallet.archetype }}</div><div class="metric-note">confidence {{ detail.wallet.confidence | money(2) }}</div></div>
+    <div class="metric"><div class="metric-label">Trades seen</div><div class="metric-value num">{{ detail.wallet.metrics.n_trades if detail.wallet.metrics else 0 }}</div><div class="metric-note">win rate {{ ((detail.wallet.metrics.win_rate * 100) | money(0)) if detail.wallet.metrics and detail.wallet.metrics.win_rate is not none else '-' }}%</div></div>
+  </div>
+
+  <h3>Score components</h3>
+  {% if detail.snaps %}
+    {% set c = detail.snaps[0].components %}
+    <div class="bars">
+      {% for key, label in [('profitability','Profitability 25%'), ('early_entry','Early entry 25%'), ('exit_timing','Exit timing 15%'), ('risk_behavior','Risk behaviour 15%'), ('consistency','Consistency 10%'), ('influence','Influence 10%')] %}
+      <div class="bar-row">
+        <span class="muted">{{ label }}</span>
+        <span class="bar"><span style="width:{{ c.get(key, 0) }}%"></span></span>
+        <span class="bar-val">{{ c.get(key, 0) }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty"><strong>No score snapshot</strong>Components are written on every rescore.</div>
+  {% endif %}
+
+  <hr>
+  <h3>Reputation history</h3>
+  {% if detail.reps %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th class="num">Reputation</th><th class="num">Base score</th><th>Intent at rescore</th><th class="num">Trades</th><th>When</th></tr></thead>
+      <tbody>
+      {% for r in detail.reps %}
+        <tr>
+          <td class="num">{{ r.reputation | money(2) }}</td>
+          <td class="num">{{ r.drivers.base_score if r.drivers else '-' }}</td>
+          <td><span class="chip">{{ r.drivers.intent if r.drivers else '-' }}</span></td>
+          <td class="num">{{ r.drivers.n_trades if r.drivers else '-' }}</td>
+          <td class="muted">{{ r.timestamp.strftime('%Y-%m-%d %H:%M') }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty"><strong>No reputation history yet</strong>Each rescore is versioned for audit and replay.</div>
+  {% endif %}
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-head"><h2>Ranked wallets</h2><span class="muted" style="font-size:12px">{{ wallets | length }} tracked</span></div>
+  {% if wallets %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Wallet</th><th>Tier</th><th class="num">Score</th><th class="num">Reputation</th>
+            <th>Archetype</th><th class="num">Trades</th><th class="num">Realized</th><th class="num">Win rate</th></tr>
+      </thead>
+      <tbody>
+      {% for w in wallets %}
+        <tr>
+          <td><a href="/app/smart-money?wallet={{ w.id }}" class="num">{{ w.address[:14] }}…</a></td>
+          <td><span class="chip tier-{{ w.tier }}">{{ w.tier }}</span></td>
+          <td class="num">{{ w.score | money(1) }}</td>
+          <td class="num">{{ w.reputation | money(1) }}</td>
+          <td class="muted">{{ w.archetype }}</td>
+          <td class="num">{{ w.metrics.n_trades if w.metrics else 0 }}</td>
+          <td class="num {{ 'pos' if w.metrics and w.metrics.realized_pnl_pct and w.metrics.realized_pnl_pct > 0 else '' }}">
+            {{ w.metrics.realized_pnl_pct if w.metrics and w.metrics.realized_pnl_pct is not none else '-' }}%
+          </td>
+          <td class="num">{{ ((w.metrics.win_rate * 100) | money(0)) if w.metrics and w.metrics.win_rate is not none else '-' }}%</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty">
+    <strong>No wallets scored yet</strong>
+    Wallets enter the ledger once a scan sees swaps above the minimum whale trade size.
+    {% if bot.status != 'running' %}Press Start AI to begin scanning.{% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-head"><h2>Recent movements</h2></div>
+  {% if flows %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Wallet</th><th>Side</th><th class="num">Value USD</th><th class="num">Price est.</th><th>Token</th><th>When</th></tr></thead>
+      <tbody>
+      {% for f in flows %}
+        <tr>
+          <td class="num">#{{ f.wallet }}</td>
+          <td><span class="chip {{ 'buy' if f.side == 'buy' else 'reject' }}">{{ f.side }}</span></td>
+          <td class="num">${{ f.value_usd | money(0) }}</td>
+          <td class="num">{{ '%.8g' % f.price_est }}</td>
+          <td class="muted num">{{ f.token_address[:12] }}…</td>
+          <td class="muted nowrap">{{ f.timestamp.strftime('%m-%d %H:%M') }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty"><strong>No movements recorded</strong>The ledger fills as whale swaps are ingested.</div>
+  {% endif %}
+</div>
+
+{% endblock %}

@@ -1,0 +1,55 @@
+# AlphaHunter AI, light profile.
+# One container, one SQLite file, no Redis. Intended for the shared home server where
+# RAM is scarce; measure real usage after deployment rather than assuming idle RSS.
+#
+#   docker compose up -d --build
+#   Configure .env first. Expose only behind HTTPS and operator authentication.
+#
+# One SQLite writer, no extra database services.
+
+name: alphahunter
+
+services:
+  alphahunter:
+    build: .
+    image: ${ALPHAHUNTER_IMAGE:-alphahunter:1.0.3}
+    container_name: alphahunter
+    restart: unless-stopped
+    # Bind to localhost only when a reverse proxy terminates TLS in front of it.
+    # Use "8010:8010" to expose it directly on the LAN/Tailscale instead.
+    ports:
+      - "127.0.0.1:8010:8010"
+    environment:
+      APP_ENV: production
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?set PUBLIC_ORIGIN to your HTTPS origin}
+      BOOTSTRAP_EMAIL: ${BOOTSTRAP_EMAIL:-}
+      BOOTSTRAP_PASSWORD: ${BOOTSTRAP_PASSWORD:-}
+      ALPHAHUNTER_DATABASE_URL: ${DATABASE_URL:-sqlite:////data/alphahunter.db}
+      TRADING_MODE: paper
+      ENABLE_LIVE_EXECUTION: "false"
+      DEMO_MODE: "false"
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env}
+      CHAINS: ${CHAINS:-solana}
+      MAX_POOLS_PER_SCAN: ${MAX_POOLS_PER_SCAN:-4}
+      NEW_POOLS_PER_SCAN: ${NEW_POOLS_PER_SCAN:-2}
+      SCAN_INTERVAL_S: ${SCAN_INTERVAL_S:-120}
+      SCAN_TIMEOUT_S: ${SCAN_TIMEOUT_S:-30}
+      DAILY_LOSS_CAP_PCT: ${DAILY_LOSS_CAP_PCT:-5}
+      MAX_POSITIONS: ${MAX_POSITIONS:-5}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TELEGRAM_TOPIC_ID: ${TELEGRAM_TOPIC_ID:-0}
+    volumes:
+      - alphahunter-data:/data
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  alphahunter-data:

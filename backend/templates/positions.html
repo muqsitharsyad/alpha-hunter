@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Positions{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Positions</h1>
+  <span class="muted" style="font-size:12px">each position carries a hard stop, TP levels and trailing state</span>
+</div>
+
+{% if rows %}
+{% for p in rows %}
+{% set mark = p.last_price or p.avg_entry %}
+{% set low = p.initial_stop %}
+{% set span = (p.tp_levels[1].price - low) if p.tp_levels and p.tp_levels|length > 1 else (p.avg_entry * 1.2 - low) %}
+{% set pct = ((mark - low) / span * 100) if span > 0 else 0 %}
+<div class="card">
+  <div class="card-head">
+    <h2>{{ p.symbol }} <span class="chip">{{ p.chain }}</span></h2>
+    <span class="num {{ 'pos' if mark > p.avg_entry else ('neg' if mark < p.avg_entry else '') }}" style="font-size:15px">
+      {{ ((mark / p.avg_entry - 1) * 100) | pct }}
+    </span>
+  </div>
+
+  <dl class="kv" style="margin-bottom:14px">
+    <dt>Entry</dt><dd>{{ '%.10g' % p.avg_entry }}</dd>
+    <dt>Mark</dt><dd>{{ '%.10g' % mark }}</dd>
+    <dt>Quantity open</dt><dd>{{ '%.6g' % p.qty_open }}</dd>
+    <dt>Notional</dt><dd>${{ p.notional_usd | money }}</dd>
+    <dt>Stop loss</dt><dd>{{ '%.10g' % p.stop_loss }} (initial {{ '%.10g' % p.initial_stop }}{% if p.stop_loss > p.initial_stop %}, tightened{% endif %})</dd>
+    <dt>Risk at entry</dt><dd>${{ p.risk_usd | money }}</dd>
+    <dt>Peak</dt><dd>{{ '%.10g' % p.peak_price }}</dd>
+    <dt>Trailing</dt><dd>
+      {% if p.trailing_state and p.trailing_state.active %}
+        active, stop {{ '%.10g' % p.trailing_state.stop }} ({{ (p.trailing_state.step_pct * 100) | money(1) }}% step)
+      {% else %}
+        not active, triggers at {{ ((p.trailing_state.trigger_pct * 100) | money(1)) if p.trailing_state else '-' }}% gain
+      {% endif %}
+    </dd>
+    <dt>Strategy</dt><dd>{{ p.strategy_version }}</dd>
+    <dt>Opened</dt><dd>{{ p.opened_at.strftime('%Y-%m-%d %H:%M') }}</dd>
+  </dl>
+
+  <div class="spine" style="min-width:0">
+    <div class="spine-risk" style="width:{{ pct if pct < 100 else 100 }}%"></div>
+    <div class="spine-mark" style="left:{{ pct if pct < 100 else 100 }}%"></div>
+  </div>
+  <div class="spine-legend">stop {{ '%.6g' % p.initial_stop }} · mark {{ '%.6g' % mark }} · TP2 {{ '%.6g' % (p.tp_levels[1].price if p.tp_levels and p.tp_levels|length > 1 else 0) }}</div>
+
+  <hr>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Target</th><th class="num">Price</th><th class="num">Allocation</th><th>Status</th></tr></thead>
+      <tbody>
+      {% for tp in p.tp_levels %}
+        <tr>
+          <td>TP{{ tp.level }}</td>
+          <td class="num">{{ '%.10g' % tp.price }}</td>
+          <td class="num">{{ (tp.alloc_pct * 100) | money(0) }}%</td>
+          <td><span class="chip {{ 'buy' if tp.done else '' }}">{{ 'filled' if tp.done else 'pending' }}</span></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <details style="margin-top:12px">
+    <summary>Event log ({{ p.events | length }} entries)</summary>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>When</th><th>Event</th><th>Detail</th></tr></thead>
+        <tbody>
+        {% for e in p.events | reverse %}
+          <tr>
+            <td class="muted nowrap">{{ e.ts[:19] }}</td>
+            <td><span class="chip">{{ e.type }}</span></td>
+            <td class="muted" style="font-size:12px">
+              {% if e.note %}{{ e.note }}{% elif e.price %}price {{ '%.8g' % e.price }}{% endif %}
+              {% if e.qty %} · qty {{ '%.4g' % e.qty }}{% endif %}
+              {% if e.pnl is defined and e.pnl is not none %} · pnl ${{ e.pnl | money(2) }}{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+</div>
+{% endfor %}
+{% else %}
+<div class="empty">
+  <strong>No open positions</strong>
+  Press Start AI. A position opens only after a whale signal passes token safety, liquidity,
+  copy feasibility, risk and consensus gates.
+</div>
+{% endif %}
+
+{% endblock %}

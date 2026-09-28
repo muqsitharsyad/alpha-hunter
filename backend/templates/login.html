@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · AlphaHunter</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="login-wrap">
+  <div class="login-card">
+    <h1 style="margin-bottom:4px">AlphaHunter</h1>
+    <p class="muted" style="font-size:12px;margin:0 0 18px">
+      Autonomous smart-money intelligence, paper trading only.
+    </p>
+
+    {% if error %}
+      <div class="notice error">Email or password did not match.</div>
+    {% endif %}
+
+    <form method="post" action="/login">
+      <div class="field">
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" autocomplete="username" required>
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password"
+               required minlength="8">
+      </div>
+      <button class="primary" type="submit" style="width:100%;justify-content:center">Sign in</button>
+    </form>
+
+    {% if demo %}
+      <hr>
+      <p class="muted" style="font-size:12px;margin:0">
+        Demo mode is on. The seeded account is
+        <span class="num">demo@alphahunter.local</span> with password
+        <span class="num">demo1234</span>. Create your own account with
+        <span class="num">POST /auth/register</span>.
+      </p>
+    {% endif %}
+  </div>
+</div>
+</body>
+</html>

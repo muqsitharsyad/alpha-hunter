@@ -1,0 +1,17 @@
+.env
+.env.*
+operator-login.txt
+backups/
+!.env.example
+.git
+.gitignore
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+data
+agent-temp-folder
+*.db
+*.sqlite
+*.sqlite3
+*.log

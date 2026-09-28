@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+{% block title %}Learning{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Learning</h1>
+  <span class="muted" style="font-size:12px">nothing is promoted without out-of-sample and statistical gates</span>
+</div>
+
+<div class="metrics">
+  <div class="metric">
+    <div class="metric-label">Followed-signal hit rate</div>
+    <div class="metric-value num">
+      {% if signal.hit_rate is not none %}{{ signal.hit_rate | money(1) }}%{% else %}n/a{% endif %}
+    </div>
+    <div class="metric-note">
+      {{ signal.hits }} of {{ signal.resolved }} resolved, target 55%
+    </div>
+  </div>
+  <div class="metric">
+    <div class="metric-label">Signals pending</div>
+    <div class="metric-value num">{{ signal.pending }}</div>
+    <div class="metric-note">resolved at the 24h horizon</div>
+  </div>
+  <div class="metric">
+    <div class="metric-label">Learning events</div>
+    <div class="metric-value num">{{ events | length }}</div>
+    <div class="metric-note">post-trade features stored</div>
+  </div>
+  <div class="metric">
+    <div class="metric-label">Model versions</div>
+    <div class="metric-value num">{{ models | length }}</div>
+    <div class="metric-note">immutable after promotion</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <h2>Strategy tournament</h2>
+    <form method="post" action="/app/learning/run">
+      <button type="submit">Run tournament</button>
+    </form>
+  </div>
+
+  <p class="muted" style="font-size:12px;margin-top:0">
+    Diagnostic comparison only. Minimum {{ gates.min_sample }} observations for an eligible result;
+    no strategy is promoted automatically. Not a validated out-of-sample backtest.
+  </p>
+
+  {% if tournament %}
+    <div class="notice {% if tournament.winner %}ok{% else %}warn{% endif %}">
+      {% if tournament.winner %}Winner: {{ tournament.winner }}. {{ tournament.notes }}
+      {% else %}No entrant cleared the sample gate. {{ tournament.notes }}{% endif %}
+    </div>
+    {% if tournament.ranking %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Strategy</th><th class="num">Samples</th><th class="num">Expectancy</th><th class="num">Sharpe proxy</th><th class="num">Penalty proxy</th><th>Eligible</th></tr></thead>
+        <tbody>
+        {% for r in tournament.ranking %}
+          <tr>
+            <td>{{ r.name }}</td>
+            <td class="num">{{ r.stat.n }}</td>
+            <td class="num">{{ r.stat.mean | money(4) }}</td>
+            <td class="num">{{ r.stat.sharpe | money(2) }}</td>
+            <td class="num">{{ r.stat.deflated_sharpe | money(2) }}</td>
+            <td>
+              {% if r.stat.ineligible %}<span class="chip reject">{{ r.stat.ineligible }}</span>
+              {% else %}<span class="chip buy">yes</span>{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  {% else %}
+    <div class="empty">
+      <strong>No tournament run in this view</strong>
+      Run it to inspect available strategy records; they are not independent trade outcomes.
+      With fewer than {{ gates.min_sample }} resolved trades every entrant is correctly ineligible.
+    </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-head"><h2>Strategies</h2></div>
+  {% if strategies %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Name</th><th>Version</th><th>Status</th><th>Rationale</th><th>Registered</th></tr></thead>
+      <tbody>
+      {% for s in strategies %}
+        <tr>
+          <td>{{ s.name }}</td>
+          <td class="num">{{ s.version }}</td>
+          <td><span class="chip {{ 'buy' if s.status == 'champion' else 'watch' }}">{{ s.status }}</span></td>
+          <td class="muted" style="font-size:12px">{{ s.rationale or '-' }}</td>
+          <td class="muted nowrap">{{ s.created_at.strftime('%Y-%m-%d') }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty">
+    <strong>No strategy registered</strong>
+    Running the tournament registers the baseline whale-copy strategy first.
+  </div>
+  {% endif %}
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <div class="card-head"><h2>Post-trade events</h2></div>
+    {% if events %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Source</th><th>Label</th><th class="num">PnL %</th><th>When</th></tr></thead>
+        <tbody>
+        {% for e in events %}
+          <tr>
+            <td class="muted">{{ e.source_type }} #{{ e.source_id }}</td>
+            <td><span class="chip {{ 'buy' if e.outcome_label == 'win' else 'reject' }}">{{ e.outcome_label }}</span></td>
+            <td class="num {{ 'pos' if e.pnl_pct > 0 else ('neg' if e.pnl_pct < 0 else '') }}">{{ e.pnl_pct | pct }}</td>
+            <td class="muted nowrap">{{ e.timestamp.strftime('%m-%d %H:%M') }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty"><strong>No learning events yet</strong>A closed trade writes one.</div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Memory</h2></div>
+    {% if memory %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Kind</th><th>Summary</th><th class="num">Importance</th><th>Updated</th></tr></thead>
+        <tbody>
+        {% for m in memory %}
+          <tr>
+            <td><span class="chip">{{ m.kind }}</span></td>
+            <td class="muted" style="font-size:12px">{{ m.summary }}</td>
+            <td class="num">{{ m.importance | money(2) }}</td>
+            <td class="muted nowrap">{{ m.updated_at.strftime('%m-%d %H:%M') }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty"><strong>Memory is empty</strong>Wallets, opportunities and outcomes are summarised here.</div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head"><h2>Tournament runs</h2></div>
+  {% if tours %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th class="num">Run</th><th>Window</th><th class="num">Entrants</th><th>Winner</th><th>Promoted</th><th>Notes</th></tr></thead>
+      <tbody>
+      {% for t in tours %}
+        <tr>
+          <td class="num">#{{ t.id }}</td>
+          <td class="muted nowrap">{{ t.window_start.strftime('%m-%d') }} to {{ t.window_end.strftime('%m-%d') }}</td>
+          <td class="num">{{ t.entrants | length }}</td>
+          <td class="num">{{ t.winner_strategy_id or 'none' }}</td>
+          <td><span class="chip {{ 'buy' if t.promoted else 'ignore' }}">{{ 'yes' if t.promoted else 'no' }}</span></td>
+          <td class="muted" style="font-size:12px">{{ t.notes }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty"><strong>No tournament history</strong>Every run stores its entrants, ranking and stats for audit.</div>
+  {% endif %}
+</div>
+
+{% endblock %}

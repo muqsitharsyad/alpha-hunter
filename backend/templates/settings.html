@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Settings</h1>
+  <span class="muted" style="font-size:12px">risk limits and scan targets apply to the next decision cycle</span>
+</div>
+
+{% if saved %}<div class="notice ok">Settings saved. The next scan uses them.</div>{% endif %}
+{% if error %}<div class="notice error">{{ error }}</div>{% endif %}
+
+<div class="grid-2">
+  <div class="card">
+    <div class="card-head"><h2>Risk and universe</h2></div>
+    <form method="post" action="/app/settings">
+      <div class="field">
+        <label for="risk_profile">Risk profile</label>
+        <select id="risk_profile" name="risk_profile">
+          {% for rp in ['conservative', 'balanced', 'aggressive'] %}
+            <option value="{{ rp }}" {% if row and row.risk_profile == rp %}selected{% endif %}>{{ rp }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="max_positions">Maximum simultaneous positions</label>
+        <input id="max_positions" name="max_positions" type="number" min="1" max="20"
+               value="{{ row.max_positions if row else 5 }}">
+      </div>
+      <div class="field">
+        <label for="max_daily_loss_pct">Daily loss cap, percent of equity</label>
+        <input id="max_daily_loss_pct" name="max_daily_loss_pct" type="number" step="0.5"
+               min="0.5" max="50" value="{{ row.max_daily_loss_pct if row else 5 }}">
+      </div>
+      <div class="field">
+        <label for="allowed_chains">Allowed chains, comma separated</label>
+        <input id="allowed_chains" name="allowed_chains" type="text"
+               value="{{ (row.allowed_chains | join(',')) if row and row.allowed_chains else 'solana' }}">
+      </div>
+      <div class="form-actions">
+        <button class="primary" type="submit">Save settings</button>
+        <span class="muted" style="font-size:12px">every change is written to the audit log</span>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Paper account</h2></div>
+    <dl class="kv">
+      <dt>Equity</dt><dd>${{ (acc.equity if acc else 0) | money }}</dd>
+      <dt>Starting equity</dt><dd>${{ (acc.starting_equity if acc else 0) | money }}</dd>
+      <dt>Peak equity</dt><dd>${{ (acc.peak_equity if acc else 0) | money }}</dd>
+      <dt>Realized PnL</dt><dd>${{ (acc.realized_pnl if acc else 0) | money }}</dd>
+      <dt>Fees paid</dt><dd>${{ (acc.fees_paid if acc else 0) | money }}</dd>
+      <dt>Day</dt><dd>{{ acc.day_key if acc else '-' }}</dd>
+      <dt>Status</dt><dd>{{ acc.status if acc else '-' }}</dd>
+    </dl>
+    <hr>
+    <p class="muted" style="font-size:12px;margin:0">
+      Mode is locked to paper. There is no live-money execution path in this build, no custody and
+      no withdrawal permission anywhere in the codebase.
+    </p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head"><h2>Gate configuration</h2><span class="muted" style="font-size:12px">from environment, read only</span></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Setting</th><th class="num">Value</th><th>Effect</th></tr></thead>
+      <tbody>
+        <tr><td class="num">max_slippage_bps</td><td class="num">{{ cfg.max_slippage_bps | money(0) }}</td><td class="muted">hard gate on modelled copy slippage</td></tr>
+        <tr><td class="num">depth_multiple</td><td class="num">{{ cfg.depth_multiple | money(0) }}</td><td class="muted">pool depth must exceed this multiple of our size</td></tr>
+        <tr><td class="num">max_signal_age_s</td><td class="num">{{ cfg.max_signal_age_s }}</td><td class="muted">stale whale entries are not copied</td></tr>
+        <tr><td class="num">max_chase_pct</td><td class="num">{{ cfg.max_chase_pct | money(1) }}%</td><td class="muted">price move since whale entry ceiling</td></tr>
+        <tr><td class="num">max_pct_of_whale_size</td><td class="num">{{ (cfg.max_pct_of_whale_size * 100) | money(0) }}%</td><td class="muted">our size versus the whale trade</td></tr>
+        <tr><td class="num">min_pool_liquidity_usd</td><td class="num">${{ cfg.min_pool_liquidity_usd | money(0) }}</td><td class="muted">liquidity floor for any entry</td></tr>
+        <tr><td class="num">min_whale_trade_usd</td><td class="num">${{ cfg.min_whale_trade_usd | money(0) }}</td><td class="muted">smallest flow counted as a whale event</td></tr>
+        <tr><td class="num">composite_buy_threshold</td><td class="num">{{ cfg.composite_buy_threshold | money(0) }}</td><td class="muted">score needed for BUY, all gates still required</td></tr>
+        <tr><td class="num">scan_interval_s</td><td class="num">{{ cfg.scan_interval_s }}</td><td class="muted">decision cycle length</td></tr>
+        <tr><td class="num">data_cost_budget_usd_per_day</td><td class="num">${{ cfg.data_cost_budget_usd_per_day | money(2) }}</td><td class="muted">free providers in this build, guardrail stays in place</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head"><h2>Notifications</h2>
+    <span class="chip {{ 'buy' if notifier.enabled else 'ignore' }}">
+      {{ 'telegram connected' if notifier.enabled else 'telegram not configured' }}
+    </span>
+  </div>
+  <p class="muted" style="font-size:12px;margin-top:0">
+    Set <span class="num">TELEGRAM_BOT_TOKEN</span>, <span class="num">TELEGRAM_CHAT_ID</span> and
+    optionally <span class="num">TELEGRAM_TOPIC_ID</span> in the environment to receive these.
+    Without them events are logged only, and trading is never blocked by a delivery failure.
+  </p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Event kind</th><th>Trigger</th></tr></thead>
+      <tbody>
+        {% for k in notify_kinds %}
+        <tr><td><span class="chip">{{ k }}</span></td><td class="muted">
+          {% if k == 'convergence' %}two or more qualified wallets buy the same asset inside the window
+          {% elif k == 'tier_s_action' %}a tier S wallet trades
+          {% elif k == 'entry' %}a paper entry is executed, with size and modelled slippage
+          {% elif k == 'exit' %}TP1, TP2, stop loss or trailing stop fires
+          {% elif k == 'distribution' %}a major whale distribution is detected
+          {% elif k == 'risk_limit' %}a daily loss or exposure limit is breached
+          {% elif k == 'stale_feed' %}a decision critical feed falls outside its TTL
+          {% elif k == 'learning' %}a model or strategy is promoted or rolled back
+          {% else %}a manipulation or MEV flag is raised{% endif %}
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if notifier.sent %}
+  <hr>
+  <h3>Recently sent</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Kind</th><th>Message</th><th>When</th></tr></thead>
+      <tbody>
+      {% for s in notifier.sent %}
+        <tr>
+          <td><span class="chip">{{ s.kind }}</span></td>
+          <td class="muted" style="font-size:12px">{{ s.text }}</td>
+          <td class="muted nowrap">{{ s.ts[:19] }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-head"><h2>Disclaimer</h2></div>
+  <p class="muted" style="font-size:12px;margin:0">
+    AlphaHunter is a research tool running on simulated capital. It is not financial advice, it
+    does not custody funds, and no profit or accuracy is guaranteed. Whale derived signals are
+    statistical observations, not accusations of wrongdoing or claims about non public information.
+  </p>
+</div>
+
+{% endblock %}

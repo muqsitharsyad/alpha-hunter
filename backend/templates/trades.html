@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Trades{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Trades</h1>
+  <span class="muted" style="font-size:12px">closed paper trades with the reason each one ended</span>
+</div>
+
+{% if stats.n %}
+<div class="metrics">
+  <div class="metric"><div class="metric-label">Closed trades</div><div class="metric-value num">{{ stats.n }}</div><div class="metric-note">{{ stats.wins }} winners</div></div>
+  <div class="metric"><div class="metric-label">Win rate</div><div class="metric-value num">{{ stats.win_rate | money(1) }}%</div><div class="metric-note">target for BUY precision is 45%</div></div>
+  <div class="metric"><div class="metric-label">Expectancy</div><div class="metric-value num {{ 'pos' if stats.expectancy > 0 else ('neg' if stats.expectancy < 0 else '') }}">${{ stats.expectancy | money(2) }}</div><div class="metric-note">per trade, after costs</div></div>
+  <div class="metric"><div class="metric-label">Profit factor</div><div class="metric-value num">{{ stats.profit_factor | money(2) if stats.profit_factor is not none else 'n/a' }}</div><div class="metric-note">gross win over gross loss</div></div>
+  <div class="metric"><div class="metric-label">Net PnL</div><div class="metric-value num {{ 'pos' if stats.total > 0 else ('neg' if stats.total < 0 else '') }}">${{ stats.total | money }}</div><div class="metric-note">realized, fees included</div></div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-head"><h2>History</h2><span class="muted" style="font-size:12px">latest 200</span></div>
+  {% if rows %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Symbol</th><th>Entry</th><th class="num">Entry px</th><th class="num">Exit px</th>
+            <th class="num">PnL</th><th class="num">%</th><th class="num">R</th>
+            <th>Exit reason</th><th>Strategy</th><th>Held</th></tr>
+      </thead>
+      <tbody>
+      {% for t in rows %}
+        <tr>
+          <td>{{ t.position.symbol if t.position else '#' ~ t.position_id }}</td>
+          <td class="muted nowrap">{{ t.entry_time.strftime('%m-%d %H:%M') }}</td>
+          <td class="num">{{ '%.8g' % t.entry_price }}</td>
+          <td class="num">{{ '%.8g' % t.exit_price }}</td>
+          <td class="num {{ 'pos' if t.pnl > 0 else ('neg' if t.pnl < 0 else '') }}">${{ t.pnl | money(2) }}</td>
+          <td class="num {{ 'pos' if t.pnl_pct > 0 else ('neg' if t.pnl_pct < 0 else '') }}">{{ t.pnl_pct | pct }}</td>
+          <td class="num">{{ t.r_multiple | money(2) }}</td>
+          <td><span class="chip">{{ t.exit_reason }}</span></td>
+          <td class="muted" style="font-size:12px">{{ t.strategy_version }}</td>
+          <td class="muted nowrap">
+            {% if t.duration_s %}{{ (t.duration_s / 3600) | money(1) }}h{% else %}-{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty">
+    <strong>No closed trades yet</strong>
+    Every exit writes an outcome row: reason, R multiple, max favourable and adverse excursion, duration.
+    {% if bot.status != 'running' %}Press Start AI to begin.{% endif %}
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}
