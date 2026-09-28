@@ -3,7 +3,7 @@
 Tanggal: 28 September 2026.
 Pemilik rencana/reviewer: Astra. Pelaksana berikutnya: Luna.
 Status: R3 ACTIVE/OPEN; R0–R2 verified, full operational acceptance belum ditutup.
-Scope update 28 September 2026: backup rotation smoke, operator runbook, provider retry/cooldown regression coverage, read-only soak launch, and quantitative evidence snapshot have been executed. Soak result and Phase 0.5 acceptance remain open by design.
+Scope update 28 September 2026: backup rotation smoke, operator runbook, provider retry/cooldown regression coverage, read-only soak launch with automatic finalizer, quantitative evidence snapshot, and immutable local Git provenance have been executed. Soak result and Phase 0.5 acceptance remain open by design.
 
 ## 0. Baca ini terlebih dahulu
 
