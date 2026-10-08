@@ -7,73 +7,55 @@
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
+<a class="skip-link" href="#main-content">Skip to content</a>
 <div class="shell">
-
-  <nav class="rail">
-    <a class="brand" href="/app/dashboard">
-      <span class="brand-name">AlphaHunter</span>
-      <span class="brand-sub">paper only · v1.0</span>
+  <nav class="rail" aria-label="Primary navigation">
+    <a class="brand" href="/app/dashboard" aria-label="AlphaHunter dashboard">
+      <span class="brand-mark" aria-hidden="true">AH</span>
+      <span><span class="brand-name">AlphaHunter</span><span class="brand-sub">Paper operations</span></span>
     </a>
-
     <div class="nav">
       <a href="/app/dashboard" {% if nav == 'dashboard' %}aria-current="page"{% endif %}>Dashboard</a>
-      <a href="/app/smart-money" {% if nav == 'smart' %}aria-current="page"{% endif %}>Smart Money</a>
-      <a href="/app/opportunities" {% if nav == 'opps' %}aria-current="page"{% endif %}>Opportunities</a>
       <a href="/app/positions" {% if nav == 'positions' %}aria-current="page"{% endif %}>Positions</a>
+      <a href="/app/opportunities" {% if nav == 'opps' %}aria-current="page"{% endif %}>Opportunities</a>
+      <a href="/app/smart-money" {% if nav == 'smart' %}aria-current="page"{% endif %}>Smart money</a>
       <a href="/app/trades" {% if nav == 'trades' %}aria-current="page"{% endif %}>Trades</a>
       <a href="/app/learning" {% if nav == 'learning' %}aria-current="page"{% endif %}>Learning</a>
+      <a href="/app/health" {% if nav == 'health' %}aria-current="page"{% endif %}>System health</a>
       <a href="/app/settings" {% if nav == 'settings' %}aria-current="page"{% endif %}>Settings</a>
-      <a href="/app/health" {% if nav == 'health' %}aria-current="page"{% endif %}>System Health</a>
     </div>
-
     <div class="rail-foot">
-      <a href="/docs" class="muted" style="font-size:11px">API docs</a>
-      <form method="post" action="/logout">
-        <button type="submit">Sign out</button>
-      </form>
+      <a href="/docs" class="rail-link">API documentation</a>
+      <form method="post" action="/logout"><button class="rail-signout" type="submit">Sign out</button></form>
     </div>
   </nav>
-
-  <main class="main">
+  <main id="main-content" class="main">
     <div id="action-error" class="notice error" role="alert" hidden></div>
-
-    <div class="botbar" data-status="{{ bot.status }}">
-      <span class="bot-dot" aria-hidden="true"></span>
-      <span class="bot-mode">PAPER</span>
-      <span class="bot-label">
-        {% if bot.status == 'running' %}Autonomous scanning
-        {% elif bot.status == 'paused' %}Paused, positions still managed
-        {% elif bot.status == 'safe' %}Safe mode, strongest signals only
-        {% else %}Idle, press Start AI to begin{% endif %}
-      </span>
-      {% if bot.emergency_active %}
-        <span class="chip reject">emergency brake active</span>
-      {% endif %}
-      <span class="bot-actions">
+    <section class="botbar" data-status="{{ bot.status }}" aria-label="Bot controls and current state">
+      <div class="bot-state">
+        <span class="bot-dot" aria-hidden="true"></span>
+        <div>
+          <span class="bot-mode">PAPER SYSTEM</span>
+          <span class="bot-label">
+            {% if bot.status == 'running' %}Autonomous scanning
+            {% elif bot.status == 'paused' %}Paused, positions still managed
+            {% elif bot.status == 'safe' %}Safe mode, strongest signals only
+            {% else %}Idle, start AI to begin{% endif %}
+          </span>
+        </div>
+      </div>
+      {% if bot.emergency_active %}<span class="chip reject">Emergency brake active</span>{% endif %}
+      <div class="bot-actions">
         {% if bot.status == 'running' %}
-          <form method="post" action="/app/ui/bot/pause">
-            <button type="submit">Pause</button>
-          </form>
-          <form method="post" action="/app/ui/bot/safe-mode">
-            <button type="submit">Safe mode</button>
-          </form>
+          <form method="post" action="/app/ui/bot/pause"><button type="submit">Pause bot</button></form>
+          <form method="post" action="/app/ui/bot/safe-mode"><button type="submit">Use safe mode</button></form>
         {% else %}
-          <form method="post" action="/app/ui/bot/start">
-            <button class="primary" type="submit">Start AI</button>
-          </form>
+          <form method="post" action="/app/ui/bot/start"><button class="primary" type="submit">Start paper scan</button></form>
         {% endif %}
-        {% if bot.emergency_active %}
-          <form method="post" action="/app/ui/bot/clear-emergency">
-            <button type="submit">Clear brake</button>
-          </form>
-        {% endif %}
-        <form method="post" action="/app/ui/bot/close-all"
-              data-confirm="Close every open paper position at the last simulated price?">
-          <button class="danger" type="submit">Close all</button>
-        </form>
-      </span>
-    </div>
-
+        {% if bot.emergency_active %}<form method="post" action="/app/ui/bot/clear-emergency"><button type="submit">Clear brake</button></form>{% endif %}
+        <form method="post" action="/app/ui/bot/close-all" data-confirm="Close every open paper position only after executable depth is available?"><button class="danger" type="submit">Close positions</button></form>
+      </div>
+    </section>
     {% block content %}{% endblock %}
   </main>
 </div>
