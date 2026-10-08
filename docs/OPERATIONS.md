@@ -45,7 +45,9 @@ SQLite integrity, and bot state. It never starts a scan or changes state.
 The monitor owns a lock and records its PID, epoch range, interval, and run ID. The
 finalizer is fail-closed: it rejects a live observer and only passes a completed run
 with full duration, required sample coverage, bounded sample gaps, clean health/HTTP/
-SQLite state, zero restarts, and a paused bot.
+SQLite state, zero restarts, and a paused bot. A passing 24-hour finalizer automatically
+starts the 7-day observer and its finalizer through `systemd --user`; any failed 24-hour
+report stops the chain. Set `CHAIN_7D=0` only for isolated evaluator tests.
 
 Run the safety alert check from cron/systemd:
 

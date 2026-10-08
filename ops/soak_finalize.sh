@@ -8,9 +8,11 @@ PID_FILE=${PID_FILE:-$APP_DIR/ops/soak.pid}
 LOG_FILE=${1:?usage: soak_finalize.sh LOG_FILE [REPORT_FILE]}
 OUT_FILE=${2:-$APP_DIR/ops/soak-final-$(date -u +%Y%m%dT%H%M%SZ).md}
 MAX_GAP_FACTOR=${MAX_GAP_FACTOR:-3}
+CHAIN_7D=${CHAIN_7D:-1}
 
 case "$MAX_GAP_FACTOR" in ''|*[!0-9]*) printf 'MAX_GAP_FACTOR must be a positive integer\n' >&2; exit 2;; esac
 [ "$MAX_GAP_FACTOR" -gt 0 ] || { printf 'MAX_GAP_FACTOR must be positive\n' >&2; exit 2; }
+case "$CHAIN_7D" in 0|1) ;; *) printf 'CHAIN_7D must be 0 or 1\n' >&2; exit 2;; esac
 
 if [ -f "$PID_FILE" ]; then
   pid=$(awk -F'[ =]' '/^pid=/{print $2}' "$PID_FILE")
@@ -67,4 +69,16 @@ status=PASS
 } > "$OUT_FILE"
 rm -f "$PID_FILE"
 printf 'result=%s status=%s samples=%s failures=%s\n' "$OUT_FILE" "$status" "$samples" "$failures"
+if [ "$status" = PASS ] && [ "$CHAIN_7D" = 1 ]; then
+  chain_stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  next_log="$APP_DIR/ops/soak-7d-$chain_stamp.log"
+  next_report="$APP_DIR/ops/soak-7d-$chain_stamp.md"
+  monitor_unit="alphahunter-soak-7d-$chain_stamp"
+  finalizer_unit="alphahunter-soak-finalize-7d-$chain_stamp"
+  systemd-run --user --unit "$monitor_unit" --collect /bin/bash -lc \
+    "cd '$APP_DIR' && INTERVAL_S=60 ./ops/soak_monitor.sh 604800 '$next_log'"
+  systemd-run --user --unit "$finalizer_unit" --on-active=7d2min --collect /bin/bash -lc \
+    "cd '$APP_DIR' && PID_FILE='$APP_DIR/ops/soak.pid' CHAIN_7D=0 ./ops/soak_finalize.sh '$next_log' '$next_report'"
+  printf 'followup=7d monitor=%s.service finalizer=%s.timer log=%s\n' "$monitor_unit" "$finalizer_unit" "$next_log"
+fi
 [ "$status" = PASS ]
