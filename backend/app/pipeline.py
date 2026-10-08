@@ -340,7 +340,7 @@ class AlphaHunterPipeline:
                     continue
                 price = pool.price_usd
                 self._resolve_signal_quality(pos.token_id, price)
-                out = self.pos_mgr.check_exits(pos, price, regime)
+                out = self.pos_mgr.check_exits(pos, price, regime, pool.liquidity_usd)
                 if out["action"] not in ("hold", "none"):
                     closes.append({"position_id": pos.id, "symbol": pos.symbol,
                                    "reason": out["reason"], "pnl": out.get("pnl", 0.0)})

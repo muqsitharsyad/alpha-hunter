@@ -139,7 +139,7 @@ def test_tp1_partial_exit_and_stop_loss_and_trailing(pipeline, running_account):
 
     pm = PositionManager()
 
-    out = pm.check_exits(pos, entry * 1.09, "bull_expansion")
+    out = pm.check_exits(pos, entry * 1.09, "bull_expansion", pool_depth=1_000_000.0)
     assert out["action"] in ("hold", "close_all")
     assert any(str(e["type"]).startswith("tp") for e in pos.events), "TP1 must fire"
 
@@ -148,7 +148,7 @@ def test_tp1_partial_exit_and_stop_loss_and_trailing(pipeline, running_account):
         assert partly, "partial exit must be recorded as a trade row"
         pos2 = db.query(PaperPosition).filter(PaperPosition.id == pid).first()
 
-    out2 = pm.check_exits(pos2, entry * 1.25, "bull_expansion")
+    out2 = pm.check_exits(pos2, entry * 1.25, "bull_expansion", pool_depth=1_000_000.0)
     # PRD 17.1: after TP1+TP2 the remainder is a runner managed by trailing / smart exit,
     # so the position may legitimately stay open at this mark.
     assert out2["reason"] in ("trailing_stop", "runner_managed", "tp_exhausted", "SL", "none")
@@ -164,7 +164,7 @@ def test_stop_loss_closes_position_and_records_reason(pipeline, running_account)
     pos = paper_position(running_account["account_id"])
     from app.db import session_scope
     pid, stop = pos.id, pos.stop_loss
-    out = PositionManager().check_exits(pos, stop * 0.99, "sideways")
+    out = PositionManager().check_exits(pos, stop * 0.99, "sideways", pool_depth=1_000_000.0)
     assert out["action"] == "close_all" and out["reason"] == "SL"
     with session_scope() as db:
         p = db.query(PaperPosition).filter(PaperPosition.id == pid).first()
@@ -180,10 +180,10 @@ def test_trailing_activates_after_favourable_move_and_never_loosens():
                                         "peak": 100.0, "stop": 95.0},
                         strategy_version="whale_copy@1.0.0", events=[], status="open")
     pm = PositionManager()
-    pm.check_exits(pos, 108.0, "bull_expansion")
+    pm.check_exits(pos, 108.0, "bull_expansion", pool_depth=1_000_000.0)
     assert pos.trailing_state["active"] is True
     first_stop = pos.trailing_state["stop"]
-    pm.check_exits(pos, 120.0, "bull_expansion")
+    pm.check_exits(pos, 120.0, "bull_expansion", pool_depth=1_000_000.0)
     assert pos.trailing_state["stop"] > first_stop, "trailing stop only moves up"
 
 
@@ -226,7 +226,7 @@ def test_close_all_manual_switch_closes_positions(pipeline, running_account):
         pos = db.query(PaperPosition).filter(PaperPosition.account_id == state["account_id"],
                                              PaperPosition.status == "open").all()
         for p in pos:
-            PositionManager()._close_all(p, p.last_price or p.avg_entry, "manual_close_all")
+            PositionManager()._close_all(p, p.last_price or p.avg_entry, "manual_close_all", pool_depth=1_000_000.0)
     with session_scope() as db:
         assert db.query(PaperPosition).filter(PaperPosition.status == "open").count() == 0
     EmergencyLayer().set_state("paused")
@@ -239,7 +239,7 @@ def test_trade_outcome_is_available_for_learning(pipeline, running_account):
     from app.db import session_scope
 
     pid = pos.id
-    PositionManager()._close_all(pos, pos.avg_entry * 0.9, "SL")
+    PositionManager()._close_all(pos, pos.avg_entry * 0.9, "SL", pool_depth=1_000_000.0)
     with session_scope() as db:
         t = db.query(PaperTrade).filter(PaperTrade.position_id == pid).first()
         assert t is not None and t.pnl < 0

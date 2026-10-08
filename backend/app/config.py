@@ -53,8 +53,7 @@ class Settings(BaseSettings):
         self.trading_mode = "paper"
         self.enable_live_execution = False
         return self
-    database_url: str = "postgresql+psycopg://alphahunter:alphahunter@localhost:5433/alphahunter"
-    redis_url: str = "redis://localhost:6380/0"
+    database_url: str = "sqlite:///../data/alphahunter.db"
 
     trading_mode: str = "paper"
     demo_mode: bool = False

@@ -19,7 +19,7 @@ ALPHAHUNTER_DATABASE_URL="sqlite:///../data/dev.db" ALPHAHUNTER_FORCE_DEMO=1 \
   ../.venv/Scripts/python run.py
 ```
 
-Open http://127.0.0.1:8000 and sign in with `demo@alphahunter.local` / `demo1234`.
+Open http://127.0.0.1:8000 and use the demo account seeded by the local test fixture.
 Press **Start AI** to try the paper workflow. A scan can produce WATCH/REJECT and no entries.
 
 `ALPHAHUNTER_FORCE_DEMO=1` uses deterministic fixtures with no network; synthetic wallet
@@ -36,8 +36,9 @@ docker compose up -d --build
 # Bind: 127.0.0.1:8010 only. Configure an HTTPS reverse proxy to PUBLIC_ORIGIN.
 ```
 
-One container, one SQLite file in a named volume. Actual RAM use is not yet benchmarked.
-Postgres is not part of this deployment; a future migration would require explicit engineering.
+One container, one SQLite file in a named volume. Postgres and Redis are not part of this deployment.
+The deployed private UI is Tailscale-only; `PRIVATE_UI_NO_AUTH=true` is accepted in production
+only for a `.ts.net` `PUBLIC_BASE_URL`. The JSON API remains bearer-token protected.
 
 ## Why the stack is smaller than the PRD draft
 
@@ -96,15 +97,16 @@ to learning event. They do not establish a positive out-of-sample edge.
   Bootstrap creates one operator. Remove `BOOTSTRAP_PASSWORD` from `.env` after first startup;
   subsequent restarts use the account in SQLite. Back up the volume and test restoring it
   offline before relying on it.
-- No Docker build or remote deployment has been verified in this environment. Do not treat
-  this as a validated production release. See `docs/QUANT_AUDIT.md` for trading limitations.
+- The private paper deployment has been verified on a localhost-bound container through
+  Tailscale HTTPS. This is not a profitability, strategy-edge, or live-money readiness claim.
+  See `docs/QUANT_AUDIT.md` and `tasks/todo.md` for remaining acceptance gates.
 
 ## Operating it
 
 - **Pause** stops new entries and keeps managing open positions. **Safe mode** allows only the
-  strongest signals. **Close all** pauses entries and simulates exits at fresh last marks only;
-  stale/missing prices return 409 and leave positions open. Even fresh marks do not guarantee
-  executable exits or model exit slippage accurately.
+  strongest signals. **Close all** pauses entries but deliberately rejects an open-position exit
+  until a fresh executable pool-depth quote is supplied by the monitored path; it never invents a
+  fill from a last mark. Simulated exits apply adverse depth-based slippage and are not real fills.
 - Automatic brakes fire on daily loss, drawdown, provider outage, stale decision-critical data
   and a crash regime. A brake blocks new entries and shows up on System Health with a reason.
 - Telegram alerts are optional. Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` (plus

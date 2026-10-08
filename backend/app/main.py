@@ -179,10 +179,8 @@ def bot_close_all(uid: int = Depends(user_id_from_request)):
                 stale.append(p.id)
         if stale:
             raise HTTPException(409, f"paper close blocked: stale or missing price for position IDs {stale}; bot paused")
-        for p in pos:
-            # A fresh mark is only a simulated fill, not proof of executable liquidity.
-            from .execution import PositionManager
-            PositionManager()._close_all(p, p.last_price, "manual_close_all")
+        if pos:
+            raise HTTPException(409, "manual close is blocked: a fresh executable pool-depth quote is required; bot paused")
     return {"status": "paused", "closed": len(pos)}
 
 

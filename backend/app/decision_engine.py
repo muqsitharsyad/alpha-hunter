@@ -224,9 +224,13 @@ class DecisionEngine:
                 tok.age_hours = p.age_hours
                 tok.listed = candidate["kind"] == "listed"
                 tok.metadata_json = {**(tok.metadata_json or {}), "pool_address": p.pool_address}
+            token_health = candidate.get("token_health_components", {})
+            whale_value_usd = max((float(getattr(sw, "value_usd", 0.0) or 0.0)
+                                   for sw in candidate.get("whale_swaps", [])), default=0.0)
             db.add(TokenScore(token_id=tok.id, liquidity_score=round(p.liquidity_usd, 2),
                               health_score=components.get("token_health", 0),
-                              security_score=80.0, whale_score=components.get("smart_money", 0),
+                              security_score=token_health.get("security", 0.0),
+                              whale_score=components.get("smart_money", 0),
                               components=candidate.get("token_health_components", {}),
                               timestamp=_now()))
             strategy = candidate.get("strategy") or "whale_copy@1.0.0"
@@ -237,7 +241,8 @@ class DecisionEngine:
                 gate_results=gates, feasibility=getattr(feas, "details", {}),
                 features={"pool": p.pool_address, "price": p.price_usd, "liq": p.liquidity_usd,
                           "vol24": p.volume_24h_usd, "age_hours": p.age_hours,
-                          "price_change_h24": p.price_change_h24, "whale_value_usd": feas.details.get("our_size", 0)},
+                          "price_change_h24": p.price_change_h24, "whale_value_usd": whale_value_usd,
+                          "our_size_notional": feas.details.get("our_size", 0)},
                 regime=regime, strategy_version=strategy, feature_hash=feature_hash,
             )
             db.add(opp)

@@ -37,11 +37,11 @@ def trades(pid):
 def test_tp_allocates_initial_quantity_and_final_exit_only_sells_runner(entry):
     pos = load_position(PaperExecution().open_position(**entry))
     pm = PositionManager()
-    pm.check_exits(pos, pos.avg_entry * 1.09)
+    pm.check_exits(pos, pos.avg_entry * 1.09, pool_depth=entry["pool_depth"])
     assert pos.qty_open == pytest.approx(70)
-    pm.check_exits(pos, pos.avg_entry * 1.20)
+    pm.check_exits(pos, pos.avg_entry * 1.20, pool_depth=entry["pool_depth"])
     assert pos.qty_open == pytest.approx(30)
-    pm.close_all(pos, pos.avg_entry * 1.15, "manual")
+    pm.close_all(pos, pos.avg_entry * 1.15, "manual", pool_depth=entry["pool_depth"])
     fills = trades(pos.id)
     assert [t.qty for t in fills] == pytest.approx([30, 40, 30])
     assert load_position(pos.id).qty_open == 0
@@ -58,8 +58,8 @@ def test_detached_repeat_close_and_mark_cannot_resurrect_position(entry):
     pid = PaperExecution().open_position(**entry)
     first, stale = load_position(pid), load_position(pid)
     pm = PositionManager()
-    pm.close_all(first, first.avg_entry, "manual")
-    assert pm.close_all(stale, stale.avg_entry, "manual") == 0
+    pm.close_all(first, first.avg_entry, "manual", pool_depth=entry["pool_depth"])
+    assert pm.close_all(stale, stale.avg_entry, "manual", pool_depth=entry["pool_depth"]) == 0
     pm.mark(stale, stale.avg_entry * 2)
     assert load_position(pid).status == "closed"
     assert len(trades(pid)) == 1
@@ -68,11 +68,11 @@ def test_detached_repeat_close_and_mark_cannot_resurrect_position(entry):
 def test_tp_survives_event_truncation(entry):
     pos = load_position(PaperExecution().open_position(**entry))
     pm = PositionManager()
-    pm.check_exits(pos, pos.avg_entry * 1.09)
+    pm.check_exits(pos, pos.avg_entry * 1.09, pool_depth=entry["pool_depth"])
     for _ in range(65):
         pm.mark(pos, pos.avg_entry * 1.09)
-    pm.check_exits(pos, pos.avg_entry * 1.20)
-    pm.close_all(pos, pos.avg_entry, "manual")
+    pm.check_exits(pos, pos.avg_entry * 1.20, pool_depth=entry["pool_depth"])
+    pm.close_all(pos, pos.avg_entry, "manual", pool_depth=entry["pool_depth"])
     assert sum(t.qty for t in trades(pos.id)) == pytest.approx(pos.qty)
 
 
@@ -88,7 +88,7 @@ def test_close_failure_rolls_back_trade_and_position(entry, monkeypatch):
 
     monkeypatch.setattr(pm, "_record_exit", fail_after_record)
     with pytest.raises(RuntimeError, match="injected"):
-        pm.close_all(pos, pos.avg_entry, "manual")
+        pm.close_all(pos, pos.avg_entry, "manual", pool_depth=entry["pool_depth"])
     assert trades(pos.id) == []
     assert load_position(pos.id).qty_open == pos.qty
     assert pos.status == "open"
@@ -117,7 +117,7 @@ def test_entry_is_idempotent_and_cannot_spend_more_than_available(entry):
 def test_close_updates_equity_before_next_entry(entry):
     executor = PaperExecution()
     pos = load_position(executor.open_position(**entry))
-    PositionManager().close_all(pos, pos.avg_entry * 0.1, "manual")
+    PositionManager().close_all(pos, pos.avg_entry * 0.1, "manual", pool_depth=entry["pool_depth"])
     with session_scope() as db:
         account = db.get(PaperAccount, entry["account_id"])
         assert account.equity < account.starting_equity
@@ -132,6 +132,21 @@ def test_close_updates_equity_before_next_entry(entry):
     expensive = dict(entry, opportunity_id=oid, token_id=tid, qty=900, notional=9000)
     with pytest.raises(ValueError, match="cash|equity"):
         executor.open_position(**expensive)
+
+
+def test_exit_uses_adverse_depth_slippage_and_persists_execution_evidence(entry):
+    pos = load_position(PaperExecution().open_position(**entry))
+    intended_price = pos.avg_entry * 1.10
+    PositionManager().close_all(pos, intended_price, "manual", pool_depth=10_000.0)
+    with session_scope() as db:
+        trade = db.query(PaperTrade).filter_by(position_id=pos.id).one()
+        order = db.query(PaperOrder).filter_by(account_id=entry["account_id"], token_id=entry["token_id"], side="sell").one()
+        assert trade.exit_price < intended_price
+        assert trade.slippage_bps > 0
+        assert trade.features["intended_exit_price"] == pytest.approx(intended_price)
+        assert order.intended_price == pytest.approx(intended_price)
+        assert order.fill_price == pytest.approx(trade.exit_price)
+        assert order.slippage_bps == pytest.approx(trade.slippage_bps)
 
 
 def test_cannot_stack_open_position_for_same_account_and_token(entry):

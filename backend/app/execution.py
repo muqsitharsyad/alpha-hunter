@@ -204,60 +204,69 @@ class PositionManager:
                     sync_account(db, current.account_id)
         return pos
 
-    def _record_exit(self, db, pos: PaperPosition, qty: float, price: float, reason: str,
+    def _record_exit(self, db, pos: PaperPosition, qty: float, intended_price: float,
+                     fill_price: float, exit_slippage_bps: float, reason: str,
                      pnl: float, fees: float, exit_fees: float) -> None:
         opened = _aware(pos.opened_at) or _now()
         basis = pos.avg_entry * qty
         allocated_risk = (pos.risk_usd or 0.0) * qty / pos.qty
         trade = PaperTrade(position_id=pos.id, account_id=pos.account_id, qty=qty,
                           entry_time=opened, exit_time=_now(), entry_price=pos.avg_entry,
-                          exit_price=price, fees=fees, slippage_bps=0.0, pnl=pnl,
+                          exit_price=fill_price, fees=fees, slippage_bps=exit_slippage_bps, pnl=pnl,
                           pnl_pct=pnl / basis * 100.0,
                           r_multiple=pnl / allocated_risk if allocated_risk > 0 else 0.0,
                           max_favorable=(pos.peak_price / pos.avg_entry - 1.0) * 100.0,
-                          max_adverse=max(0.0, (pos.avg_entry - price) / pos.avg_entry * 100.0),
+                          max_adverse=max(0.0, (pos.avg_entry - fill_price) / pos.avg_entry * 100.0),
                           duration_s=max(0.0, (_now() - opened).total_seconds()),
                           exit_reason=reason, strategy_version=pos.strategy_version,
-                          regime="unknown")
+                          regime="unknown", features={"intended_exit_price": intended_price,
+                                                       "exit_slippage_bps": exit_slippage_bps,
+                                                       "exit_fee_usd": exit_fees})
         db.add(trade)
         db.flush()
         db.add(PaperOrder(account_id=pos.account_id, opportunity_id=pos.opportunity_id,
                           token_id=pos.token_id, side="sell", order_type="market", qty=qty,
-                          intended_price=price, fill_price=price, fees=exit_fees,
-                          slippage_bps=0.0, status="filled",
+                          intended_price=intended_price, fill_price=fill_price, fees=exit_fees,
+                          slippage_bps=exit_slippage_bps, status="filled",
                           idempotency_key=f"exit-{pos.account_id}-{trade.id}"))
         db.add(AuditLog(actor_type="engine", actor_id="positions",
                         action="position_closed" if pos.qty_open == 0 else "position_partial_exit",
                         entity="position", entity_id=str(pos.id),
-                        payload={"reason": reason, "exit_price": price, "pnl": pnl, "qty": qty}))
+                        payload={"reason": reason, "intended_exit_price": intended_price,
+                                 "fill_price": fill_price, "exit_slippage_bps": exit_slippage_bps,
+                                 "pnl": pnl, "qty": qty}))
 
-    def _exit(self, db, pos: PaperPosition, qty: float, price: float, reason: str) -> float:
+    def _exit(self, db, pos: PaperPosition, qty: float, price: float, pool_depth: float,
+              reason: str) -> float:
         if db is None:
             raise ValueError("cannot execute an unpersisted position")
         _positive("qty", qty)
         _positive("initial quantity", pos.qty)
         _positive("entry price", pos.avg_entry)
+        _positive("pool depth", pool_depth)
         if qty > pos.qty_open or pos.qty_open > pos.qty:
             raise ValueError("exit quantity exceeds inventory")
         # Legacy manually-created positions may not have an entry cost basis.
         entry_costs = max(0.0, (pos.notional_usd or 0.0) - pos.avg_entry * pos.qty)
-        exit_fees = price * qty * 0.001 + PaperExecution().gas_fee_usd(pos.chain)
+        fill_price, exit_slippage_bps = PaperExecution().fill_price("sell", price, price * qty, pool_depth)
+        exit_fees = fill_price * qty * 0.001 + PaperExecution().gas_fee_usd(pos.chain)
         fees = exit_fees + entry_costs * qty / pos.qty
-        pnl = (price - pos.avg_entry) * qty - fees
+        pnl = (fill_price - pos.avg_entry) * qty - fees
         if not math.isfinite(pnl) or not math.isfinite(fees):
             raise ValueError("exit totals must be finite")
         pos.qty_open = max(0.0, pos.qty_open - qty)
-        pos.last_price, pos.last_price_ts = price, _now()
+        pos.last_price, pos.last_price_ts = fill_price, _now()
         if pos.qty_open == 0:
             pos.status, pos.closed_at, pos.exit_reason = "closed", _now(), reason
-        self._record_exit(db, pos, qty, price, reason, pnl, fees, exit_fees)
+        self._record_exit(db, pos, qty, price, fill_price, exit_slippage_bps, reason, pnl, fees, exit_fees)
         db.flush()
         sync_account(db, pos.account_id)
         pos.events = (list(pos.events or []) + [{"ts": _now().isoformat(),
-                      "type": reason.lower(), "price": price, "qty": qty, "pnl": pnl}])[-60:]
+                      "type": reason.lower(), "intended_price": price, "fill_price": fill_price,
+                      "slippage_bps": exit_slippage_bps, "qty": qty, "pnl": pnl}])[-60:]
         return pnl
 
-    def _tp_exit(self, pos: PaperPosition, price: float, tp: dict[str, Any], qty: float) -> float:
+    def _tp_exit(self, pos: PaperPosition, price: float, pool_depth: float, tp: dict[str, Any], qty: float) -> float:
         """Compatibility entry point; TP identity and allocation come from the DB."""
         _positive("price", price)
         _positive("qty", qty)
@@ -273,29 +282,31 @@ class PositionManager:
                     if allocation > 1:
                         raise ValueError("TP allocation must not exceed one")
                     qty = min(current.qty_open, current.qty * allocation)
-                    pnl = self._exit(db, current, qty, price, f"TP{target['level']}")
+                    pnl = self._exit(db, current, qty, price, pool_depth, f"TP{target['level']}")
                     target.update(done=True, closed_qty=qty)
                     current.tp_levels = levels
         return pnl
 
-    def close_all(self, pos: PaperPosition, price: float, reason: str) -> float:
+    def close_all(self, pos: PaperPosition, price: float, reason: str, pool_depth: float | None = None) -> float:
         """Atomically close persisted remaining inventory; retries return zero."""
         _positive("price", price)
+        _positive("pool depth", pool_depth or 0.0)
         pnl = 0.0
         with _position_transaction(pos) as (db, current):
             if current.status == "open" and current.qty_open > 0:
-                pnl = self._exit(db, current, current.qty_open, price, reason)
+                pnl = self._exit(db, current, current.qty_open, price, pool_depth, reason)
         return pnl
 
     _close_all = close_all
 
-    def check_exits(self, pos: PaperPosition, price: float, regime: str = "sideways") -> dict[str, Any]:
+    def check_exits(self, pos: PaperPosition, price: float, regime: str = "sideways", pool_depth: float | None = None) -> dict[str, Any]:
         _positive("price", price)
+        _positive("pool depth", pool_depth or 0.0)
         with _position_transaction(pos) as (db, current):
-            result = self._check_exits(db, current, price)
+            result = self._check_exits(db, current, price, pool_depth)
         return result
 
-    def _check_exits(self, db, pos: PaperPosition, price: float) -> dict[str, Any]:
+    def _check_exits(self, db, pos: PaperPosition, price: float, pool_depth: float) -> dict[str, Any]:
         if pos.status != "open":
             return {"action": "none", "reason": "already_closed"}
         self._mark(pos, price, _now())
@@ -303,13 +314,13 @@ class PositionManager:
             pos.status, pos.closed_at, pos.exit_reason = "closed", _now(), "tp_exhausted"
             return {"action": "close_all", "reason": "tp_exhausted"}
         if price <= pos.stop_loss:
-            pnl = self._exit(db, pos, pos.qty_open, price, "SL")
+            pnl = self._exit(db, pos, pos.qty_open, price, pool_depth, "SL")
             return {"action": "close_all", "reason": "SL", "pnl": pnl}
 
         state = dict(pos.trailing_state or {})
         if state.get("active", False):
             if price <= state.get("stop", pos.stop_loss):
-                pnl = self._exit(db, pos, pos.qty_open, price, "trailing_stop")
+                pnl = self._exit(db, pos, pos.qty_open, price, pool_depth, "trailing_stop")
                 return {"action": "close_all", "reason": "trailing_stop", "pnl": pnl}
             state["stop"] = max(state.get("stop", pos.stop_loss), price * (1 - state.get("step_pct", 0.035)))
         elif price >= pos.avg_entry * (1 + state.get("trigger_pct", 0.06)):
@@ -327,7 +338,7 @@ class PositionManager:
                 if allocation > 1:
                     raise ValueError("TP allocation must not exceed one")
                 qty = min(pos.qty_open, pos.qty * allocation)
-                self._exit(db, pos, qty, price, f"TP{tp['level']}")
+                self._exit(db, pos, qty, price, pool_depth, f"TP{tp['level']}")
                 tp.update(done=True, closed_qty=qty)
         pos.tp_levels = levels
         if pos.qty_open == 0:
