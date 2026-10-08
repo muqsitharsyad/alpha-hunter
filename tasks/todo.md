@@ -54,5 +54,5 @@
 
 ## Time-gated operations
 
-- [ ] Current 24-hour infrastructure soak finalizes around 2026-10-09 10:19 WIB. Only `PASS` chains the 7-day soak automatically.
+- [ ] UI/ledger release 24-hour infrastructure soak started 2026-10-08 14:01 WIB as `alphahunter-soak-24h-ui-20261008T070152Z`; its finalizer is due around 2026-10-09 14:04 WIB. The earlier ledger soak was deliberately stopped because this release replaced its image. Only a final `PASS` chains the 7-day soak automatically.
 - [ ] The 7-day report and Phase 0.5 result cannot be marked complete before actual elapsed time and data exist.
