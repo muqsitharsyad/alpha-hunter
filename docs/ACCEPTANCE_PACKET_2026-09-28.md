@@ -1,5 +1,9 @@
 # AlphaHunter Acceptance Packet — September 28, 2026
 
+> **PROVISIONAL / REQUEST CHANGES — Astra review 28 September 2026.** This historical packet does NOT close R0–R6. See `ASTRA_REVIEW_LUNA_2026-09-28.md`: real thread lifetime remains unbounded by coroutine cancellation, current backup is not WAL-safe and has no rotation, soak can false-PASS, source/image provenance and exact rollback are incomplete. The finalizer does not explicitly exit nonzero or deliver an external alert on FAIL. Historical observations below must not override these corrections.
+
+> **Remediation addendum — 5 October 2026:** deployment `alphahunter:1.0.4-p0` removes the coroutine timeout that abandoned `asyncio.to_thread()` scans and drains the worker during graceful shutdown; WAL-safe backup/retention and fail-closed soak scripts were deployed and smoke-tested. This does not complete R7: the 24-hour observation started at 2026-10-05 13:14:48 WIB and its scheduled finalization is 2026-10-06 13:16:47 WIB. External alert delivery and a completed duration-based report remain open.
+
 ## Scope
 
 Private paper-only deployment. No live-money execution. Bot remains paused during acceptance and soak.

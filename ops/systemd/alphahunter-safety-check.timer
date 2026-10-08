@@ -1,0 +1,11 @@
+[Unit]
+Description=Run AlphaHunter state-change safety check every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+Persistent=true
+Unit=alphahunter-safety-check.service
+
+[Install]
+WantedBy=timers.target

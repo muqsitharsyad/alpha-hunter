@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     app_env: str = "local"
     secret_key: str = ""
     public_registration: bool = False
+    private_ui_no_auth: bool = False
     bootstrap_email: str = ""
     bootstrap_password: str = Field(default="", repr=False)
     public_origin: str = ""
@@ -39,6 +40,8 @@ class Settings(BaseSettings):
                 raise ValueError("Production requires PUBLIC_ORIGIN as an HTTPS origin without a path")
             if self.public_registration:
                 raise ValueError("Public registration is not supported in single-operator production")
+            if self.private_ui_no_auth and not origin.hostname.endswith(".ts.net"):
+                raise ValueError("PRIVATE_UI_NO_AUTH is allowed only behind a Tailscale HTTPS origin")
         if "*" in self.cors_origins:
             raise ValueError("CORS_ORIGINS must contain explicit origins, not wildcards")
         if bool(self.bootstrap_email) != bool(self.bootstrap_password):
@@ -86,7 +89,6 @@ class Settings(BaseSettings):
     max_pools_per_scan: int = 12
     new_pools_per_scan: int = 6
     scan_interval_s: int = 60
-    scan_timeout_s: float = 30.0
     trending_scan_interval_s: int = 300
 
     # --- gates (PRD 11.3 / 13 / 15.2) ---

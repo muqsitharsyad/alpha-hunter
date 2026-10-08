@@ -1,5 +1,7 @@
 # AlphaHunter — Handoff Astra untuk Luna: Koreksi Acceptance dan Penutupan Operasional
 
+> **ASTRA REVIEW OVERRIDE — 28 September 2026: REQUEST CHANGES.** Klaim closure R0–R6 di checkpoint Luna di bawah dibatalkan sebagai acceptance menyeluruh. Review terbaru: `docs/ASTRA_REVIEW_LUNA_2026-09-28.md`. R3 lifecycle, backup R5, evaluator R7 dan packet R6 masih bermasalah. Historical tests/restore tetap bukti parsial, bukan closure. Tidak ada aplikasi atau deployment diubah pada review ini.
+
 Tanggal: 28 September 2026.
 Pemilik rencana/reviewer: Astra. Pelaksana berikutnya: Luna.
 Status: R3 ACTIVE/OPEN; R0–R2 verified, full operational acceptance belum ditutup.
@@ -356,10 +358,10 @@ Report akhir wajib memisahkan code implemented, local verified, server verified,
 - [x] R0 baseline dan scope jelas.
 - [x] R1 semantic HTTPS UI termasuk populated legacy/new rows lulus.
 - [x] R2 unknown/zero semantics dan non-mutation lulus.
-- [x] R3 failure, slow scan cadence, state boundary, in-flight shutdown lulus.
-- [x] R4 version persistence dan recreate normal lulus.
-- [x] R5 isolated application restore lulus.
-- [x] R6 exact artifact/server verification dan rollback siap.
+- [ ] R3 REOPEN: scan thread masih berjalan sesudah timeout; drain/shutdown/cadence belum diterima.
+- [ ] R4 PARTIAL: image teramati, exact source/image dan rollback provenance belum lengkap.
+- [ ] R5 REOPEN: historical restore retained; backup main DB aktif tidak menjamin WAL completeness, retention belum ada.
+- [ ] R6 REOPEN: exact release/rollback/semantic evidence belum lengkap.
 - [x] Docs/memory dikoreksi; tidak ada completion claim tanpa bukti.
 
 ### Stability/research terpisah
@@ -367,7 +369,7 @@ Report akhir wajib memisahkan code implemented, local verified, server verified,
 - [ ] Quant research Phase 0.5 menghasilkan evidence yang reproducible, termasuk kemungkinan hasil negatif — blocked by missing chronological point-in-time dataset.
 - [ ] Learning governance diterapkan hanya setelah evidence memadai — correctly not activated.
 
-Engineering closure R0–R6 sudah memiliki acceptance packet di `docs/ACCEPTANCE_PACKET_2026-09-28.md`. R7 dan Phase 0.5 tetap terbuka karena membutuhkan waktu/data nyata, bukan karena pekerjaan lupa dijalankan.
+Packet `docs/ACCEPTANCE_PACKET_2026-09-28.md` bersifat provisional, bukan closure. R7 bukan hanya menunggu waktu: evaluator dapat false-PASS. Ikuti koreksi dan urutan perbaikan dalam review Astra terbaru; Phase 0.5 tetap research terpisah.
 
 ## 17. Prompt siap kirim ke Luna
 

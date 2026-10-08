@@ -29,6 +29,24 @@ def test_dashboard_api_rejects_missing_bearer():
         assert client.get("/dashboard/summary").status_code == 401
 
 
+def test_tailscale_private_ui_can_bypass_browser_login_only(monkeypatch):
+    import app.web as web
+
+    settings = Settings(private_ui_no_auth=True, public_origin="https://private.tail.ts.net", _env_file=None)
+    monkeypatch.setattr(web, "get_settings", lambda: settings)
+    with TestClient(app) as client:
+        assert client.get("/", follow_redirects=False).headers["location"] == "/app/dashboard"
+        assert client.get("/app/dashboard").status_code == 200
+        assert client.get("/dashboard/summary").status_code == 401
+
+
+def test_production_private_ui_requires_tailscale_origin():
+    with pytest.raises(ValueError, match="Tailscale"):
+        Settings(app_env="production", demo_mode=False, private_ui_no_auth=True,
+                 secret_key="a-strong-secret-key-with-many-distinct-characters-123",
+                 public_origin="https://example.test", _env_file=None)
+
+
 def test_bootstrap_rejects_database_containing_demo_account():
     from app.seed import bootstrap_operator
     with TestClient(app):

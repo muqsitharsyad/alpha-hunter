@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import APIRouter, Cookie, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from sqlalchemy.orm import joinedload
 
 from .cache import CACHE
 from .config import get_settings
@@ -37,6 +38,11 @@ COOKIE = "ah_token"
 
 
 def _uid(token: str | None) -> int | None:
+    if get_settings().private_ui_no_auth:
+        with session_scope() as db:
+            account = db.query(PaperAccount).order_by(PaperAccount.id).first()
+            user = db.get(User, account.user_id) if account else None
+            return user.id if user and user.status == "active" else None
     from fastapi import HTTPException
     from .auth import decode_token, require_operator
     uid = decode_token(token) if token else None
@@ -94,12 +100,16 @@ def _settings_row(uid: int):
 # ---------------------------------------------------------------- auth pages
 @auth_router.get("/login", response_class=HTMLResponse)
 def login_page(request: Request, error: str | None = None):
+    if get_settings().private_ui_no_auth:
+        return RedirectResponse("/app/dashboard", status_code=303)
     return templates.TemplateResponse(request, "login.html",
                                       {"error": error, "demo": get_settings().demo_mode})
 
 
 @auth_router.post("/login")
 def login_submit(request: Request, email: str = Form(...), password: str = Form(...)):
+    if get_settings().private_ui_no_auth:
+        return RedirectResponse("/app/dashboard", status_code=303)
     from .auth import authenticate, create_token, limit_auth
     limit_auth(request)
     uid = authenticate(email, password)
@@ -114,6 +124,8 @@ def login_submit(request: Request, email: str = Form(...), password: str = Form(
 
 @auth_router.post("/logout")
 def logout():
+    if get_settings().private_ui_no_auth:
+        return RedirectResponse("/app/dashboard", status_code=303)
     resp = RedirectResponse("/login", status_code=303)
     resp.delete_cookie(COOKIE)
     return resp
@@ -121,6 +133,8 @@ def logout():
 
 @auth_router.get("/")
 def root(ah_token: str | None = Cookie(default=None)):
+    if get_settings().private_ui_no_auth:
+        return RedirectResponse("/app/dashboard", status_code=303)
     return RedirectResponse("/app/dashboard" if _uid(ah_token) else "/login", status_code=303)
 
 
@@ -224,7 +238,8 @@ def dashboard(request: Request, ah_token: str | None = Cookie(default=None)):
     with session_scope() as db:
         positions = db.query(PaperPosition).filter(PaperPosition.account_id == (acc.id if acc else -1),
                                                    PaperPosition.status == "open").all()
-        trades = (db.query(PaperTrade).filter(PaperTrade.account_id == (acc.id if acc else -1))
+        trades = (db.query(PaperTrade).options(joinedload(PaperTrade.position))
+                  .filter(PaperTrade.account_id == (acc.id if acc else -1))
                   .order_by(PaperTrade.exit_time.desc()).limit(10).all())
         opps = db.query(Opportunity).order_by(Opportunity.timestamp.desc()).limit(8).all()
         flows = (db.query(WalletTransaction).order_by(WalletTransaction.timestamp.desc())

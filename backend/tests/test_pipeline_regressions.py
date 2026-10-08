@@ -137,35 +137,40 @@ def test_worker_scan_failure_does_not_skip_monitoring(monkeypatch, isolated_acco
     assert result["errors"] and result["errors"][0].startswith("scan: RuntimeError")
 
 
-def test_worker_slow_scan_times_out_without_delaying_monitor(monkeypatch, isolated_account):
+def test_worker_does_not_abandon_synchronous_scan_after_deadline(monkeypatch, isolated_account):
     import asyncio
     import threading
-    import time
-    import app.main as main_module
     from app.main import _worker_cycle
 
     pipeline = AlphaHunterPipeline()
     calls = []
     scan_started = threading.Event()
-    original_timeout = main_module.s.scan_timeout_s
+    release_scan = threading.Event()
+
 
     def slow_scan():
         scan_started.set()
-        time.sleep(0.2)
+        assert release_scan.wait(1)
         calls.append("scan")
 
-    monkeypatch.setattr(main_module.s, "scan_timeout_s", 0.05)
     monkeypatch.setattr(pipeline, "scan_cycle", slow_scan)
     monkeypatch.setattr(pipeline, "refresh_positions", lambda: calls.append("monitor") or {"positions": 0})
     EmergencyLayer().set_state("running", isolated_account)
+
+    timer = threading.Timer(0.06, release_scan.set)
+    timer.start()
     try:
         result = asyncio.run(_worker_cycle(pipeline))
     finally:
-        main_module.s.scan_timeout_s = original_timeout
+        timer.cancel()
+        release_scan.set()
+
     assert result["monitor"] == {"positions": 0}
-    assert any(err.startswith("scan: TimeoutError") for err in result["errors"])
+    assert result["scan"] is None
+    assert result["errors"] == []
     assert scan_started.is_set()
     assert calls[0] == "monitor"
+    assert calls[-1] == "scan"
 
 
 def test_worker_monitor_still_runs_when_bot_pauses_during_scan(monkeypatch, isolated_account):
@@ -197,7 +202,8 @@ def test_worker_shutdown_cancels_and_clears_task(monkeypatch):
     import app.main as main_module
 
     async def blocked_worker():
-        await asyncio.Event().wait()
+        assert main_module._worker_stop_requested is not None
+        await main_module._worker_stop_requested.wait()
 
     monkeypatch.setattr(main_module, "_worker_loop", blocked_worker)
 
@@ -210,7 +216,7 @@ def test_worker_shutdown_cancels_and_clears_task(monkeypatch):
 
     task = asyncio.run(exercise())
     assert task is not None and task.done()
-    assert task.cancelled()
+    assert not task.cancelled()
     assert main_module._worker_task is None
 
 

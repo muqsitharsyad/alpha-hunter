@@ -433,6 +433,7 @@ def live_feed(uid: int = Depends(user_id_from_request)):
 
 # ---------------------------------------------------------------- worker hook
 _worker_task: asyncio.Task | None = None
+_worker_stop_requested: asyncio.Event | None = None
 _log = logging.getLogger(__name__)
 
 
@@ -448,10 +449,11 @@ async def _worker_cycle(pipeline: AlphaHunterPipeline) -> dict[str, Any]:
         if state["status"] not in ("running", "safe") or state["emergency"].get("active"):
             return
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(pipeline.scan_cycle),
-                timeout=max(0.01, s.scan_timeout_s),
-            )
+            # Do not wrap synchronous work in wait_for(): cancellation only stops
+            # the await, leaving its thread able to write after this cycle returns.
+            # Provider calls have bounded HTTP timeouts; this cycle waits for the
+            # scan to finish so there is never an abandoned, overlapping writer.
+            return await asyncio.to_thread(pipeline.scan_cycle)
         except Exception as exc:  # noqa: BLE001 - isolate scan from monitoring
             result["errors"].append(f"scan: {type(exc).__name__}: {exc}")
             _log.exception("paper worker scan failed")
@@ -480,33 +482,44 @@ async def _worker_cycle(pipeline: AlphaHunterPipeline) -> dict[str, Any]:
 async def _worker_loop():
     pipeline = AlphaHunterPipeline()
     # inherit bot state (paused until user starts)
-    while True:
+    while _worker_stop_requested is None or not _worker_stop_requested.is_set():
         try:
             await _worker_cycle(pipeline)
-            await asyncio.sleep(s.scan_interval_s)
+            if _worker_stop_requested is not None:
+                try:
+                    await asyncio.wait_for(_worker_stop_requested.wait(), timeout=s.scan_interval_s)
+                except asyncio.TimeoutError:
+                    pass
         except asyncio.CancelledError:
             _log.info("paper worker stopped")
             raise
         except Exception:  # noqa: BLE001 - last-resort loop guard
             _log.exception("paper worker cycle failed")
-            await asyncio.sleep(s.scan_interval_s)
+            if _worker_stop_requested is not None:
+                try:
+                    await asyncio.wait_for(_worker_stop_requested.wait(), timeout=s.scan_interval_s)
+                except asyncio.TimeoutError:
+                    pass
 
 
 @app.on_event("startup")
 async def _start_worker():
-    global _worker_task
+    global _worker_task, _worker_stop_requested
+    _worker_stop_requested = asyncio.Event()
     if _worker_task is None or _worker_task.done():
         _worker_task = asyncio.create_task(_worker_loop(), name="alphahunter-paper-worker")
 
 
 @app.on_event("shutdown")
 async def _stop_worker():
-    global _worker_task
+    global _worker_task, _worker_stop_requested
     task = _worker_task
     _worker_task = None
+    if _worker_stop_requested is not None:
+        _worker_stop_requested.set()
     if task is not None and not task.done():
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        # Drain rather than cancel. asyncio.to_thread cancellation does not stop the
+        # underlying synchronous work, so cancelling here would permit writes after
+        # the ASGI shutdown hook returned.
+        await task
+    _worker_stop_requested = None

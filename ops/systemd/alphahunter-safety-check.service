@@ -1,0 +1,7 @@
+[Unit]
+Description=AlphaHunter state-change safety check
+
+[Service]
+Type=oneshot
+WorkingDirectory=/var/docker-apps/alphahunter
+ExecStart=/var/docker-apps/alphahunter/ops/soak_check.sh
