@@ -12,6 +12,20 @@
 
 ## Active work
 
+### Functional PRD recovery — 2026-10-15
+
+- [x] In-transaction running/account/emergency authorization before any new entry.
+- [x] Automatic atomic LearningEvent for every simulated exit; immutable entry features/regime.
+- [x] Effective operator daily-loss cap wired into entry and emergency paths.
+- [x] Operator close executes using fresh price/depth, remains 409 on missing/stale quote.
+- [x] Qualified S/A-only consensus/forward cohort and detection-price baseline.
+- [x] Safety release deployed, 161 tests passed, exact-image clean/restore smoke passed; see `docs/ACCEPTANCE_2026-10-15.md`.
+- [ ] Historical wallet ledger features and time-decayed sample-qualified reputation.
+- [ ] Real per-chain security evidence adapter; unknown security remains blocked.
+- [ ] Budget-aware/fair provider ingestion with exit/outcome priority.
+- [ ] Immutable point-in-time collection, bounded outcome horizon and missing/delisted coverage.
+- [ ] Complete smart-exit wiring and explicit safe-mode asset eligibility.
+
 ### Task 1 — Fix exit execution realism and ledger presentation
 
 **Acceptance**
@@ -55,5 +69,5 @@
 ## Time-gated operations
 
 - [x] UI/ledger release 24-hour infrastructure soak passed 2026-10-09: 1440 samples, zero failures. Report inspected 2026-10-15.
-- [ ] Chained seven-day observation failed/interrupted by host reboot: 5901 samples, 66 failures, no completion marker. Durable calendar scheduling deployed and short-drill verified. Fresh observer `alphahunter-soak-durable-20261015T071546Z` is running until 2026-10-22 ~14:18 WIB. This is infrastructure evidence only.
+- [ ] Chained seven-day observation failed/interrupted by host reboot: 5901 samples, 66 failures, no completion marker. Durable calendar scheduling deployed and short-drill verified. Functional-safety release superseded the replacement seven-day run; current durable 24h observer `alphahunter-soak-durable-20261015T072757Z` finalizes 2026-10-16 ~14:30 WIB and chains seven days only on PASS. This is infrastructure evidence only.
 - [ ] The 7-day report and Phase 0.5 result cannot be marked complete before actual elapsed time and data exist.

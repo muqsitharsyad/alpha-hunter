@@ -248,7 +248,9 @@ class AlphaHunterPipeline:
             signal_age = (_now() - latest.block_time).total_seconds()
             if latest.price_usd and pool.price_usd:
                 price_move = (pool.price_usd / latest.price_usd - 1.0) * 100.0
-        consensus = detect_consensus(whale_swaps, min_wallets=2, window_minutes=30)
+        qualified_swaps = [w for w in whale_swaps
+                           if wallet_tiers.get((cand["chain"], w.wallet)) in {"S", "A"}]
+        consensus = detect_consensus(qualified_swaps, min_wallets=2, window_minutes=30)
 
         meta = None
         try:
@@ -301,7 +303,7 @@ class AlphaHunterPipeline:
             return
         with session_scope() as db:
             for sw in whale_swaps:
-                if sw.side != "buy":
+                if sw.side != "buy" or wallet_tiers.get((chain, sw.wallet)) not in {"S", "A"}:
                     continue
                 wid = self.wallets.wallet_id(chain, sw.wallet)
                 if not wid:
@@ -311,10 +313,22 @@ class AlphaHunterPipeline:
                                                         SignalQuality.resolved == False).first()  # noqa: E712
                 if exists:
                     continue
-                db.add(SignalQuality(wallet_id=wid, token_id=token_id, entry_price=sw.price_usd or entry_price,
+                # The whale's earlier fill is not a price available to this observer.
+                db.add(SignalQuality(wallet_id=wid, token_id=token_id, entry_price=entry_price,
                                      horizon_h=24, resolved=False))
 
     # ------------------------------------------------------------ position mgmt
+    def executable_quote(self, pos: PaperPosition) -> PoolSnapshot | None:
+        """A fresh positive price and depth are both required for paper exits."""
+        try:
+            pool = self.adapters.market.pool_snapshot(pos.chain, self._pool_addr(pos))
+        except Exception:
+            return None
+        if (pool is None or not _fresh_pool(pool, self.s.ttl_pool_s)
+                or not math.isfinite(pool.liquidity_usd) or pool.liquidity_usd <= 0):
+            return None
+        return pool
+
     def refresh_positions(self) -> dict[str, Any]:
         state = self.emergency.get_state()
         if not state.get("account_id"):
@@ -327,12 +341,8 @@ class AlphaHunterPipeline:
             positions = db.query(PaperPosition).filter(PaperPosition.account_id == state["account_id"],
                                                        PaperPosition.status == "open").all()
             for pos in positions:
-                pool = None
-                try:
-                    pool = self.adapters.market.pool_snapshot(pos.chain, self._pool_addr(pos))
-                except Exception:
-                    pool = None
-                if pool is None or not _fresh_pool(pool, self.s.ttl_pool_s):
+                pool = self.executable_quote(pos)
+                if pool is None:
                     stale_positions.append(pos.id)
                     last = _aware(pos.last_price_ts) if pos.last_price_ts else None
                     if last is None or (_now() - last).total_seconds() > self.s.ttl_pool_s:
@@ -417,6 +427,7 @@ class AlphaHunterPipeline:
         drawdown = max(0.0, (peak - account["equity"]) / peak * 100.0) if peak else 0.0
         res = self.safeties.evaluate(daily_pnl_pct=self.risk.daily_pnl_pct(account),
                                      portfolio_equity=account["equity"], drawdown_pct=drawdown,
-                                     provider_error_rate=err_rate, feed_stale=regime == "unknown", regime=regime)
+                                     provider_error_rate=err_rate, feed_stale=regime == "unknown", regime=regime,
+                                     max_daily_loss_pct=account.get("max_daily_loss_pct"))
         if res["emergency"]:
             self.emergency.raise_emergency(res["brakes"], (account_row.id if account_row else None))

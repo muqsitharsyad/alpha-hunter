@@ -1,0 +1,5 @@
+# Deployment override; install as docker-compose.override.yml on the server.
+# Credentials and runtime settings remain in the server's protected environment.
+services:
+  alphahunter:
+    image: alphahunter:1.0.6-functional-safety

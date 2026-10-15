@@ -144,7 +144,8 @@ class DecisionEngine:
             risk_ok, risk_fails = self.risk.check_entry_limits(
                 equity=equity, day_start_equity=(account or {}).get("day_start_equity", equity),
                 open_notional=open_notional, max_positions=(account or {}).get("max_positions", 5),
-                open_positions=open_positions, new_notional=our_size)
+                open_positions=open_positions, new_notional=our_size,
+                max_daily_loss_pct=account.get("max_daily_loss_pct"))
         consensus_ok = bool(consensus.get("min_wallets_met"))
         divergence = (consensus.get("sellers", 0) >= 2 and consensus.get("net_flow_usd", 0.0) < 0)
         safety_summary = safety.get("summary", "UNKNOWN")

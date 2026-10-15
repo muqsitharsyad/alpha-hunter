@@ -32,13 +32,13 @@ def running_account():
     from app.seed import seed_demo_user
 
     uid = seed_demo_user()
-    with_writes = None
-    state = EmergencyLayer().set_state("running", EmergencyLayer().get_state()["account_id"])
     from app.db import session_scope
 
     with session_scope() as db:
         acc = db.query(PaperAccount).filter(PaperAccount.user_id == uid).first()
         with_writes = acc.id
+    EmergencyLayer().clear_emergency()
+    state = EmergencyLayer().set_state("running", with_writes)
     return {"user_id": uid, "account_id": with_writes, "state": state}
 
 
@@ -79,11 +79,15 @@ def test_scan_cycle_discovers_wallets_without_user_input(pipeline, running_accou
 
 
 def test_scan_cycle_emits_explainable_opportunities(pipeline, running_account):
-    pipeline.scan_cycle()
     from app.db import session_scope
+    from sqlalchemy import func
 
     with session_scope() as db:
-        opps = db.query(Opportunity).all()
+        previous_id = db.query(func.max(Opportunity.id)).scalar() or 0
+    pipeline.scan_cycle()
+
+    with session_scope() as db:
+        opps = db.query(Opportunity).filter(Opportunity.id > previous_id).all()
         assert opps, "expected at least one opportunity"
         for o in opps:
             assert o.decision in ("BUY", "WATCH", "IGNORE")
@@ -235,7 +239,6 @@ def test_close_all_manual_switch_closes_positions(pipeline, running_account):
 # --- AC 13: losing trade produces a learning event -------------------------
 def test_trade_outcome_is_available_for_learning(pipeline, running_account):
     pos = paper_position(running_account["account_id"])
-    from app.learning import record_learning_event
     from app.db import session_scope
 
     pid = pos.id
@@ -243,10 +246,8 @@ def test_trade_outcome_is_available_for_learning(pipeline, running_account):
     with session_scope() as db:
         t = db.query(PaperTrade).filter(PaperTrade.position_id == pid).first()
         assert t is not None and t.pnl < 0
-        record_learning_event("trade", str(pid), t.strategy_version, "sideways",
-                              {"exit_reason": t.exit_reason}, "loss", t.pnl_pct)
-        ev = db.query(LearningEvent).filter(LearningEvent.source_id == str(pid)).first()
-        assert ev is not None and ev.outcome_label == "loss" and ev.pnl_pct < 0
+        ev = db.query(LearningEvent).filter_by(source_type="trade", source_id=str(t.id)).one()
+        assert ev.outcome_label == "loss" and ev.pnl_pct == pytest.approx(t.pnl_pct)
 
 
 # --- AC 3: reputation exists and is versioned -----------------------------
@@ -261,7 +262,13 @@ def test_reputation_history_is_written(pipeline, running_account):
 
 
 # --- PRD 8.1: forward hit-rate rows created -------------------------------
-def test_followed_wallet_signals_are_tracked(pipeline, running_account):
+def test_followed_wallet_signals_are_tracked(pipeline, running_account, monkeypatch):
+    # Explicit qualified-cohort fixture: a short demo history is not proof that
+    # the real scoring engine can grant A-tier status from insufficient evidence.
+    compute = pipeline.wallets.compute_for
+    def qualified_fixture(*args, **kwargs):
+        return {**compute(*args, **kwargs), "tier": "A"}
+    monkeypatch.setattr(pipeline.wallets, "compute_for", qualified_fixture)
     pipeline.scan_cycle()
     from app.db import session_scope
 

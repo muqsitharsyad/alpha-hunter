@@ -3,6 +3,7 @@ emergency brakes (PRD 22), and position sizing with a `SizingInput`-friendly int
 from __future__ import annotations
 
 import datetime as dt
+import math
 from typing import Any
 
 from .config import get_settings
@@ -10,6 +11,17 @@ from .config import get_settings
 
 def _now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
+
+
+def _effective_daily_loss_cap(max_daily_loss_pct: float | None, fallback: float) -> float:
+    """Use a valid operator override, otherwise retain the global safety limit."""
+    if max_daily_loss_pct is None or isinstance(max_daily_loss_pct, bool):
+        return fallback
+    try:
+        cap = float(max_daily_loss_pct)
+    except (TypeError, ValueError, OverflowError):
+        return fallback
+    return cap if math.isfinite(cap) and cap > 0.0 else fallback
 
 
 class RiskEngine:
@@ -52,11 +64,13 @@ class RiskEngine:
                     exposure_used_pct=round(exposure_used_pct, 2), regime_cop=regime_cop)
 
     def check_entry_limits(self, equity: float, day_start_equity: float, open_notional: float,
-                           max_positions: int, open_positions: int, new_notional: float = 0.0) -> tuple[bool, list[str]]:
+                           max_positions: int, open_positions: int, new_notional: float = 0.0,
+                           max_daily_loss_pct: float | None = None) -> tuple[bool, list[str]]:
         fails: list[str] = []
+        cap = _effective_daily_loss_cap(max_daily_loss_pct, self.s.daily_loss_cap_pct)
         daily = self.daily_pnl_pct({"equity": equity, "day_start_equity": day_start_equity})
-        if daily <= -self.s.daily_loss_cap_pct:
-            fails.append(f"daily loss {daily:.2f}% <= -cap {self.s.daily_loss_cap_pct:.1f}%")
+        if daily <= -cap:
+            fails.append(f"daily loss {daily:.2f}% <= -cap {cap:.1f}%")
         if open_positions >= max_positions:
             fails.append(f"position count {open_positions} >= max {max_positions}")
         expo = self.exposure_pct(open_notional + new_notional, equity)
@@ -72,11 +86,13 @@ class EmergencySafeties:
         self.s = get_settings()
 
     def evaluate(self, *, daily_pnl_pct: float | None, portfolio_equity: float, drawdown_pct: float,
-                 provider_error_rate: float, feed_stale: bool, regime: str) -> dict[str, Any]:
+                 provider_error_rate: float, feed_stale: bool, regime: str,
+                 max_daily_loss_pct: float | None = None) -> dict[str, Any]:
         brakes: list[dict[str, Any]] = []
-        if daily_pnl_pct is not None and daily_pnl_pct <= -self.s.daily_loss_cap_pct:
+        cap = _effective_daily_loss_cap(max_daily_loss_pct, self.s.daily_loss_cap_pct)
+        if daily_pnl_pct is not None and daily_pnl_pct <= -cap:
             brakes.append({"type": "daily_loss_limit", "severity": "critical",
-                           "detail": f"daily PnL {daily_pnl_pct:.2f}% <= -{self.s.daily_loss_cap_pct:.1f}%"})
+                           "detail": f"daily PnL {daily_pnl_pct:.2f}% <= -{cap:.1f}%"})
         if drawdown_pct >= self.s.max_drawdown_cap_pct:
             brakes.append({"type": "max_drawdown", "severity": "critical",
                            "detail": f"drawdown {drawdown_pct:.2f}% >= cap {self.s.max_drawdown_cap_pct:.1f}%"})

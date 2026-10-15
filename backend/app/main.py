@@ -166,21 +166,19 @@ def bot_close_all(uid: int = Depends(user_id_from_request)):
             raise HTTPException(404, "account not found")
         pos = db.query(PaperPosition).filter(PaperPosition.account_id == account.id,
                                              PaperPosition.status == "open").all()
-        now = dt.datetime.now(dt.timezone.utc)
-        stale = []
-        for p in pos:
-            if not p.last_price or not p.last_price_ts:
-                stale.append(p.id)
-                continue
-            marked_at = p.last_price_ts
-            if marked_at.tzinfo is None:
-                marked_at = marked_at.replace(tzinfo=dt.timezone.utc)
-            if not 0 <= (now - marked_at).total_seconds() <= s.ttl_pool_s:
-                stale.append(p.id)
-        if stale:
-            raise HTTPException(409, f"paper close blocked: stale or missing price for position IDs {stale}; bot paused")
-        if pos:
-            raise HTTPException(409, "manual close is blocked: a fresh executable pool-depth quote is required; bot paused")
+    pipeline = AlphaHunterPipeline()
+    quotes = [(p, pipeline.executable_quote(p)) for p in pos]
+    unavailable = [p.id for p, quote in quotes if quote is None]
+    if unavailable:
+        raise HTTPException(409, f"paper close blocked: stale or missing executable depth quote for position IDs {unavailable}; bot paused")
+    # Validate the full batch before submitting any close; each close is atomic
+    # and idempotent against monitoring or a repeated operator request.
+    from .pipeline import _fresh_pool
+    for p, quote in quotes:
+        if not _fresh_pool(quote, s.ttl_pool_s):
+            raise HTTPException(409, "paper close blocked: quote expired during batch; bot paused")
+    for p, quote in quotes:
+        pipeline.pos_mgr.close_all(p, quote.price_usd, "manual", pool_depth=quote.liquidity_usd)
     return {"status": "paused", "closed": len(pos)}
 
 

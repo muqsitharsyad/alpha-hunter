@@ -4,7 +4,7 @@ from uuid import uuid4
 import pytest
 
 from app.db import session_scope
-from app.execution import PaperExecution, PositionManager
+from app.execution import EmergencyLayer, PaperExecution, PositionManager
 from app.models import AuditLog, Opportunity, PaperAccount, PaperOrder, PaperPosition, PaperTrade, Token, User
 
 
@@ -19,9 +19,12 @@ def entry():
         opportunity = Opportunity(token_id=token.id, chain="solana", symbol="LEDGER")
         db.add_all([account, opportunity])
         db.flush()
-        return dict(account_id=account.id, opportunity_id=opportunity.id, token_id=token.id,
+        args = dict(account_id=account.id, opportunity_id=opportunity.id, token_id=token.id,
                     chain="solana", symbol="LEDGER", price=10.0, qty=100.0, notional=1000.0,
                     pool_depth=100000.0, risk_profile="balanced", strategy_version="test@1", regime="sideways")
+    EmergencyLayer().clear_emergency()
+    EmergencyLayer().set_state("running", args["account_id"])
+    return args
 
 
 def load_position(pid):

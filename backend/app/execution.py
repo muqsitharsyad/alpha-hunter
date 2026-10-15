@@ -14,7 +14,7 @@ from sqlalchemy.orm.attributes import set_committed_value
 from .config import get_settings
 from .db import session_scope
 from .models import (
-    AuditLog, BotState, PaperAccount, PaperOrder, PaperPosition, PaperTrade, RiskEvent,
+    AuditLog, BotState, LearningEvent, Opportunity, PaperAccount, PaperOrder, PaperPosition, PaperTrade, RiskEvent,
 )
 
 
@@ -87,13 +87,28 @@ class PaperExecution:
                 account_id=account_id, token_id=token_id, status="open").first()
             if existing_token:
                 return existing_token.id
-            account = db.get(PaperAccount, account_id)
+            # Retries above are read-only, including after a pause. Every NEW fill
+            # requires current authorization, not the scan's stale running flag.
+            # SQLite's writer reservation and PostgreSQL's singleton row lock
+            # serialize this check with control changes until the fill commits.
+            state = db.query(BotState).filter_by(id=1).with_for_update().first()
+            if (state is None or state.status != "running" or state.safe_mode
+                    or state.account_id != account_id):
+                raise ValueError("bot is not running for this paper account")
+            if (state.emergency or {}).get("active"):
+                raise ValueError("bot emergency blocks new paper entries")
+            account = db.query(PaperAccount).filter_by(id=account_id).with_for_update().first()
             if account is None or account.status != "active":
                 raise ValueError("paper account unavailable")
             committed = sum(p.qty_open * p.avg_entry for p in db.query(PaperPosition).filter_by(
                 account_id=account_id, status="open").all())
             if not math.isfinite(account.equity) or total_cost > account.equity - committed:
                 raise ValueError("insufficient paper cash/equity")
+            opportunity = db.get(Opportunity, opportunity_id)
+            # Position JSON owns the immutable entry snapshot; never reconstruct
+            # new trades from a subsequently re-evaluated opportunity.
+            entry_context = {"regime": regime,
+                             "features": deepcopy(opportunity.features or {}) if opportunity else {}}
             pos = PaperPosition(
                 account_id=account_id, token_id=token_id, chain=chain, symbol=symbol,
                 qty=qty, qty_open=qty, avg_entry=fill, notional_usd=total_cost, stop_loss=stop,
@@ -101,7 +116,7 @@ class PaperExecution:
                 tp_levels=[{"level": 1, "price": round(fill * 1.08, 12), "alloc_pct": 0.30, "done": False},
                            {"level": 2, "price": round(fill * 1.18, 12), "alloc_pct": 0.40, "done": False}],
                 trailing_state={"active": False, "trigger_pct": 0.06, "step_pct": 0.035,
-                                "peak": fill, "stop": stop},
+                                "peak": fill, "stop": stop, "entry_context": entry_context},
                 strategy_version=strategy_version, opportunity_id=opportunity_id,
                 last_price=fill, last_price_ts=_now(),
                 events=[{"ts": _now().isoformat(), "type": "open",
@@ -210,6 +225,12 @@ class PositionManager:
         opened = _aware(pos.opened_at) or _now()
         basis = pos.avg_entry * qty
         allocated_risk = (pos.risk_usd or 0.0) * qty / pos.qty
+        # Legacy positions have no frozen context; keep unknown rather than
+        # mislabeling a current opportunity evaluation as historical evidence.
+        context = (pos.trailing_state or {}).get("entry_context") or {}
+        features = deepcopy(context.get("features") or {})
+        features.update(intended_exit_price=intended_price,
+                        exit_slippage_bps=exit_slippage_bps, exit_fee_usd=exit_fees)
         trade = PaperTrade(position_id=pos.id, account_id=pos.account_id, qty=qty,
                           entry_time=opened, exit_time=_now(), entry_price=pos.avg_entry,
                           exit_price=fill_price, fees=fees, slippage_bps=exit_slippage_bps, pnl=pnl,
@@ -219,11 +240,16 @@ class PositionManager:
                           max_adverse=max(0.0, (pos.avg_entry - fill_price) / pos.avg_entry * 100.0),
                           duration_s=max(0.0, (_now() - opened).total_seconds()),
                           exit_reason=reason, strategy_version=pos.strategy_version,
-                          regime="unknown", features={"intended_exit_price": intended_price,
-                                                       "exit_slippage_bps": exit_slippage_bps,
-                                                       "exit_fee_usd": exit_fees})
+                          regime=context.get("regime") or "unknown", features=features)
         db.add(trade)
         db.flush()
+        # Actual fill identity (not position id): partial exits are distinct
+        # samples. The locked position/inventory guard makes retries no-ops.
+        db.add(LearningEvent(source_type="trade", source_id=str(trade.id),
+                             strategy_version=trade.strategy_version, regime=trade.regime,
+                             features=deepcopy(trade.features),
+                             outcome_label="win" if pnl > 0 else "loss" if pnl < 0 else "flat",
+                             pnl_pct=trade.pnl_pct, value=trade.pnl))
         db.add(PaperOrder(account_id=pos.account_id, opportunity_id=pos.opportunity_id,
                           token_id=pos.token_id, side="sell", order_type="market", qty=qty,
                           intended_price=intended_price, fill_price=fill_price, fees=exit_fees,
