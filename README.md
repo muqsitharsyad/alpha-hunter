@@ -7,6 +7,28 @@ learning record. There is no live-money path in this build.
 
 Built from `AlphaHunter_AI_PRD_v1.3_Production_Blueprint.docx`.
 
+## Current operational scope — 2026-10-16
+
+Production runs `alphahunter:1.0.8-observation`, with read-only collection enabled and
+paper entries paused. Open **System Health** to see actual persisted market/wallet data,
+provider status, forward-study coverage and acceptance blockers. Collection does not
+authorize trading; `COLLECTOR_ENABLED` defaults to false outside the deployment override.
+
+The live path now has historical wallet qualification, budget-aware fair scheduling,
+partial GoPlus Solana security evidence, atomic paper controls/learning, smart exits,
+and bounded forward-outcome recording. **267 tests pass**, but this is not full PRD or
+strategy-edge acceptance: current free security evidence cannot prove route-specific
+sell simulation, pool LP locks or deployer concentration. UNKNOWN remains blocked.
+
+Safe-mode entries additionally require an explicit `SAFE_MODE_ASSETS` chain:address
+allowlist, all normal safety gates, score ≥90 and at least $1M observed liquidity.
+The production allowlist remains empty; it is not a safety bypass.
+
+Release proof, limitations, rollback and actual data counts:
+[`docs/OBSERVATION_RELEASE_2026-10-15.md`](docs/OBSERVATION_RELEASE_2026-10-15.md).
+Authenticated research API: `GET /research/forward`; read-only CLI inside the container:
+`python -m app.forward_study`. Gross observed-mark returns are not net executable fills.
+
 ## Run it (Windows, no Docker needed)
 
 ```bash

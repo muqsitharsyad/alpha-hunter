@@ -21,6 +21,17 @@
 </div>
 
 <div class="card">
+  <div class="card-head"><h2>Collection and acceptance</h2></div>
+  <dl class="kv">
+    <dt>Read-only collector</dt><dd>{{ 'Enabled' if collector_enabled else 'Disabled' }}</dd>
+    <dt>Persisted market observations</dt><dd>{{ observations }}</dd>
+    <dt>Persisted wallet events</dt><dd>{{ wallet_events }}</dd>
+    <dt>Forward outcomes</dt><dd>{{ research.resolved }} resolved / {{ research.missing }} missing / {{ research.pending }} pending</dd>
+    <dt>Research decision</dt><dd>{{ research.decision }}</dd>
+  </dl>
+  <p class="muted" style="margin-top:14px;margin-bottom:0">Collection does not authorize entries. Current free security evidence does not cover route-specific sell simulation, pool LP locks or deployer concentration: unknown safety blocks new positions. A healthy service is not proof of strategy profitability.</p>
+</div>
+<div class="card">
   <div class="card-head"><h2>Providers</h2></div>
   {% if providers %}
   <div class="table-wrap">

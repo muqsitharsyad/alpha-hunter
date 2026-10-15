@@ -20,11 +20,14 @@
 - [x] Operator close executes using fresh price/depth, remains 409 on missing/stale quote.
 - [x] Qualified S/A-only consensus/forward cohort and detection-price baseline.
 - [x] Safety release deployed, 161 tests passed, exact-image clean/restore smoke passed; see `docs/ACCEPTANCE_2026-10-15.md`.
-- [ ] Historical wallet ledger features and time-decayed sample-qualified reputation.
-- [ ] Real per-chain security evidence adapter; unknown security remains blocked.
-- [ ] Budget-aware/fair provider ingestion with exit/outcome priority.
-- [ ] Immutable point-in-time collection, bounded outcome horizon and missing/delisted coverage.
-- [ ] Complete smart-exit wiring and explicit safe-mode asset eligibility.
+- [x] Historical deduplicated wallet ledger, minimum five resolved positions, reputation-based tier/decay; unknown NAV/exit benchmarks remain conservative.
+- [x] Partial real GoPlus Solana evidence adapter with provenance/TTL; unknown security remains blocked.
+- [x] Budget-aware/fair provider ingestion with monitoring priority; local deferral no longer recorded as upstream outage.
+- [x] Frozen forward cohort/input snapshots, bounded 24h+15min outcome window and missing outcome accounting; gross mark returns explicitly not net fill validation.
+- [x] Crash/liquidity/security/distribution smart-exit wiring; safe-mode explicit allowlist, full safety gates, score90 and $1M liquidity floor.
+- [x] Deployed final observation release with collector enabled and entries paused; 267 tests, exact-image clean/restore PASS. See `docs/OBSERVATION_RELEASE_2026-10-15.md`.
+- [ ] EXTERNAL BLOCKER: route/size-specific sell simulation, pool LP lock coverage/expiry and deployer concentration not supplied by current free security provider. No safe autonomous entry acceptance until verified evidence exists.
+- [ ] TIME/DATA GATE: sufficient chronological history/OOS outcomes, cost/latency/uncertainty and PRD statistical gates; no fabricated trades or profitability claim.
 
 ### Task 1 — Fix exit execution realism and ledger presentation
 
@@ -69,5 +72,5 @@
 ## Time-gated operations
 
 - [x] UI/ledger release 24-hour infrastructure soak passed 2026-10-09: 1440 samples, zero failures. Report inspected 2026-10-15.
-- [ ] Chained seven-day observation failed/interrupted by host reboot: 5901 samples, 66 failures, no completion marker. Durable calendar scheduling deployed and short-drill verified. Functional-safety release superseded the replacement seven-day run; current durable 24h observer `alphahunter-soak-durable-20261015T072757Z` finalizes 2026-10-16 ~14:30 WIB and chains seven days only on PASS. This is infrastructure evidence only.
+- [ ] Prior seven-day observation failed/interrupted by reboot (5901 samples, 66 failures). Final observation image supersedes intermediate runs; current durable 24h observer `alphahunter-soak-durable-20261015T233855Z` finalizes 2026-10-17 ~06:41 WIB and chains seven days only on PASS. This is infrastructure/collection evidence only.
 - [ ] The 7-day report and Phase 0.5 result cannot be marked complete before actual elapsed time and data exist.

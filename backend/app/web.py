@@ -468,4 +468,11 @@ def health_page(request: Request, ah_token: str | None = Cookie(default=None)):
                "cache": cache, "ttl_market": get_settings().ttl_market_s,
                "ttl_pool": get_settings().ttl_pool_s,
                "scan_interval": get_settings().scan_interval_s}
+    from .models import MarketSnapshot, WalletTransaction
+    from .forward_study import summary
+    with session_scope() as db:
+        ctx["observations"] = db.query(MarketSnapshot).count()
+        ctx["wallet_events"] = db.query(WalletTransaction).count()
+    ctx["collector_enabled"] = get_settings().collector_enabled
+    ctx["research"] = summary()
     return templates.TemplateResponse(request, "health.html", ctx)

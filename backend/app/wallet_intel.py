@@ -17,6 +17,15 @@ def _now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
+def _utc(value: dt.datetime) -> dt.datetime:
+    return value.replace(tzinfo=dt.timezone.utc) if value.tzinfo is None else value.astimezone(dt.timezone.utc)
+
+
+def _valid_swap(sw: SwapEvent) -> bool:
+    return (sw.side in ("buy", "sell") and bool(sw.tx_hash and sw.token_address and sw.wallet)
+            and all(math.isfinite(v) and v > 0 for v in (sw.base_amount, sw.price_usd, sw.value_usd)))
+
+
 def _weighted_avg(rows: list[tuple[float, float]]) -> float:
     num = sum(v * w for v, w in rows)
     den = sum(w for _, w in rows)
@@ -41,7 +50,7 @@ def compute_reputation(base_score: float, recent_pnls: list[tuple[float, float]]
     """PRD 9.1: reputation = w_base*base + w_recent*time_decayed_ewma(outcomes) - inactivity_penalty"""
     weights = [reputation_decay_weight(max(a, 0.0), half_life_days) for a, _ in recent_pnls]
     recent = _weighted_avg([(p, w) for (_, p), w in zip(recent_pnls, weights)]) if recent_pnls else 0.0
-    recent_score = 50.0 + recent * 20.0
+    recent_score = min(100.0, max(0.0, 50.0 + recent * 20.0))
     rep = w_base * base_score + w_recent * recent_score - penalty_for_inactivity(age_days)
     return {"reputation": round(min(max(rep, 0.0), 100.0), 2), "base_score": round(base_score, 2),
             "recent_score": round(recent_score, 2), "recent_pnls": len(recent_pnls), "age_days": round(age_days, 2)}
@@ -121,6 +130,8 @@ def _ledger_stats(swaps: list[SwapEvent], pool_prices: dict[str, float]) -> dict
     inventory = defaultdict(lambda: [0.0, 0.0])
     total_in = total_out = realized = matched_basis = 0.0
     outcomes = []
+    position_outcomes = []
+    position_totals = defaultdict(lambda: [0.0, 0.0])
     unmatched = invalid = 0
     valid = []
     for s in sorted(swaps, key=lambda x: x.block_time):
@@ -146,7 +157,12 @@ def _ledger_stats(swaps: list[SwapEvent], pool_prices: dict[str, float]) -> dict
         realized += pnl
         matched_basis += cost
         outcomes.append((s.block_time, pnl / cost * 100.0, pnl))
+        position_totals[s.token_address][0] += cost
+        position_totals[s.token_address][1] += pnl
         inventory[s.token_address] = [max(0.0, qty - matched), max(0.0, basis - cost)]
+        if matched == qty:
+            cycle_cost, cycle_pnl = position_totals.pop(s.token_address)
+            position_outcomes.append((s.block_time, cycle_pnl / cycle_cost * 100.0, cycle_pnl))
     unrealized = marked_basis = 0.0
     for token, (qty, basis) in inventory.items():
         mark = pool_prices.get(token)
@@ -155,18 +171,20 @@ def _ledger_stats(swaps: list[SwapEvent], pool_prices: dict[str, float]) -> dict
             marked_basis += basis
     remaining = sum(basis for qty, basis in inventory.values())
     concentration = max((basis for qty, basis in inventory.values()), default=0.0) / remaining * 100 if remaining else 0.0
-    profits = [max(0.0, p) for _, _, p in outcomes]
+    profits = [max(0.0, p) for _, _, p in position_outcomes]
     return dict(realized_pnl_pct=realized / matched_basis * 100 if matched_basis else 0.0,
                 realized_pnl_usd=realized, unrealized_pnl_usd=unrealized,
                 unrealized_marked_basis_usd=marked_basis, realized_cost_basis_usd=matched_basis,
                 win_rate=sum(p > 0 for _, _, p in outcomes) / len(outcomes) if outcomes else 0.0,
+                position_win_rate=sum(p > 0 for _, _, p in position_outcomes) / len(position_outcomes) if position_outcomes else 0.0,
                 n_trades=len(valid), resolved_trades=len(outcomes), unmatched_sells=unmatched,
                 invalid_events=invalid, concentration=concentration, max_drawdown_pct=None,
                 exposure_ratio=remaining / total_in if total_in else 0.0,
                 avg_trade_size_usd=(total_in + total_out) / len(valid) if valid else 0.0,
                 edge_single_trade_ratio=max(profits, default=0.0) / sum(profits) if sum(profits) else 0.0,
-                avg_exit_improvement_pct=0.0, total_in=total_in, total_out=total_out,
-                resolved_outcomes=outcomes)
+                avg_exit_improvement_pct=None, total_in=total_in, total_out=total_out,
+                resolved_outcomes=outcomes, position_outcomes=position_outcomes,
+                resolved_positions=len(position_outcomes))
 
 
 class WalletIntelligence:
@@ -193,12 +211,24 @@ class WalletIntelligence:
         inserted = 0
         with session_scope() as db:
             for sw in swaps:
+                if (sw.chain != chain or pool.chain != chain or sw.pool_address != pool.pool_address
+                        or sw.token_address != pool.token_address or not _valid_swap(sw)
+                        or _utc(sw.block_time) > _now()):
+                    continue
                 wallet = db.query(Wallet).filter_by(chain=chain, address=sw.wallet).first()
                 if wallet is None:
                     wallet = Wallet(chain=chain, address=sw.wallet,
                                     labels={"origin": "auto_discovered"}, metrics={})
                     db.add(wallet)
                     db.flush()
+                # Persist pool-specific creation evidence; never infer it from first-seen time.
+                created = pool.pool_created_at
+                if created and _utc(created) <= _utc(pool.source_ts) <= _now():
+                    metrics = dict(wallet.metrics or {})
+                    creation_times = dict(metrics.get("pool_creation_times", {}))
+                    creation_times.setdefault(sw.pool_address, _utc(created).isoformat())
+                    metrics["pool_creation_times"] = creation_times
+                    wallet.metrics = metrics
                 exists = db.query(WalletTransaction.id).filter_by(
                     tx_hash=sw.tx_hash, wallet_id=wallet.id,
                     token_address=sw.token_address).first()
@@ -217,25 +247,67 @@ class WalletIntelligence:
     def compute_for(self, chain: str, wallet_address: str, swaps: list[SwapEvent],
                     pool_prices: dict[str, float] | None = None) -> dict[str, Any]:
         pool_prices = pool_prices or {}
+        now = _now()
+        wid = self.find_or_create(chain, wallet_address)
+        # Persist scan input too: callers may compute without a preceding ingest.
+        with session_scope() as db:
+            for sw in swaps:
+                if (sw.chain != chain or sw.wallet != wallet_address or not _valid_swap(sw)
+                        or _utc(sw.block_time) > now):
+                    continue
+                if not db.query(WalletTransaction.id).filter_by(
+                        wallet_id=wid, tx_hash=sw.tx_hash, token_address=sw.token_address).first():
+                    db.add(WalletTransaction(wallet_id=wid, chain=chain, tx_hash=sw.tx_hash,
+                                             token_address=sw.token_address, pool_address=sw.pool_address,
+                                             side=sw.side, amount=sw.base_amount, price_est=sw.price_usd,
+                                             value_usd=sw.value_usd, timestamp=sw.block_time))
+            db.flush()
+            rows = db.query(WalletTransaction).filter_by(wallet_id=wid, chain=chain).order_by(
+                WalletTransaction.timestamp, WalletTransaction.id).all()
+            wallet = db.query(Wallet).filter_by(id=wid).one()
+            creation_times = (wallet.metrics or {}).get("pool_creation_times", {})
+            swaps = [SwapEvent(chain=chain, tx_hash=r.tx_hash, wallet=wallet_address,
+                               token_address=r.token_address, pool_address=r.pool_address,
+                               symbol="", side=r.side, base_amount=r.amount, quote_amount=0.0,
+                               price_usd=r.price_est, value_usd=r.value_usd,
+                               block_time=r.timestamp.replace(tzinfo=dt.timezone.utc)
+                               if r.timestamp.tzinfo is None else r.timestamp) for r in rows]
+        swaps = [sw for sw in swaps if sw.block_time <= now]
         stats = _ledger_stats(swaps, pool_prices)
         intent = classify_wallet_intent(swaps)
-        # Pool creation time is not available in the swap ledger; early entry is unproven.
-        early_ratio = 0.0
+        buys = [sw for sw in swaps if sw.side == "buy" and _valid_swap(sw)]
+        early_count = known_entries = 0
+        for sw in buys:
+            raw = creation_times.get(sw.pool_address)
+            if raw:
+                try:
+                    elapsed = (sw.block_time - _utc(dt.datetime.fromisoformat(raw))).total_seconds()
+                except (ValueError, TypeError):
+                    continue
+                if elapsed >= 0:
+                    known_entries += 1
+                    early_count += elapsed <= 3600
+        # Unknown entries receive no credit; known subsets cannot imply 100% early.
+        early_ratio = early_count / len(buys) if known_entries and buys else None
         stats["early_entry_ratio"] = early_ratio
         score = self.scorer.score(
-            realized_pnl_pct=stats["realized_pnl_pct"], win_rate=stats["win_rate"],
-            n_trades=stats["n_trades"], early_entry_ratio=early_ratio, avg_exit_improvement_pct=stats.get("avg_exit_improvement_pct", 0.0),
-            concentration=stats["concentration"], max_drawdown_pct=stats["max_drawdown_pct"] or 100.0,
+            realized_pnl_pct=stats["realized_pnl_pct"], win_rate=stats["position_win_rate"],
+            n_trades=stats["resolved_positions"], early_entry_ratio=early_ratio or 0.0,
+            avg_exit_improvement_pct=-5.0,  # no post-exit benchmark: no timing credit
+            concentration=stats["concentration"], max_drawdown_pct=100.0 if stats["max_drawdown_pct"] is None else stats["max_drawdown_pct"],
             exposure_ratio=stats["exposure_ratio"], avg_trade_size_usd=stats["avg_trade_size_usd"],
             edge_single_trade_ratio=stats["edge_single_trade_ratio"],
         )
-        outcomes = stats["resolved_outcomes"]
+        score["version"] = "w1.1"  # historical qualification input policy; scalar scorer is unchanged
+        outcomes = stats["position_outcomes"]
+        last_activity = max((ts for ts, _, _ in outcomes), default=None)
+        inactivity_days = (now - last_activity).total_seconds() / 86400 if last_activity else None
         rep = compute_reputation(score["total"],
-                                 [((_now() - ts).total_seconds() / 86400, pct / 100)
-                                  for ts, pct, _ in outcomes], 0.0)
+                                 [((now - ts).total_seconds() / 86400, pct / 100)
+                                  for ts, pct, _ in outcomes], inactivity_days or 0.0)
         # A few visible swaps are not evidence of a profitable smart-money wallet.
-        tier = tier_for(score["total"]) if len(outcomes) >= 5 else "C"
-        wid = self.find_or_create(chain, wallet_address)
+        history_qualified = len(outcomes) >= 5 and stats["unmatched_sells"] == 0
+        tier = tier_for(rep["reputation"]) if history_qualified else "C"
         # PRD 9.2: every reputation change is versioned for audit/replay
         try:
             from .models import WalletReputationHistory
@@ -245,8 +317,15 @@ class WalletIntelligence:
                                                drivers={"base_score": score["total"],
                                                         "intent": intent,
                                                         "n_trades": stats["n_trades"],
-                                                        "win_rate": round(stats["win_rate"], 3)},
-                                               regime="unknown", version="r1.0"))
+                                                        "win_rate": round(stats["win_rate"], 3),
+                                                        "resolved_positions": len(outcomes),
+                                                        "history_qualified": history_qualified,
+                                                        "last_qualifying_activity": last_activity.isoformat() if last_activity else None,
+                                                        "inactivity_days": inactivity_days,
+                                                        "recent_score": rep["recent_score"],
+                                                        "early_entry_evidence_count": known_entries,
+                                                        "half_life_days": 30.0},
+                                               regime="unknown", version="r1.1"))
         except Exception:  # noqa: BLE001 - history is best-effort
             pass
         w = None
@@ -259,8 +338,18 @@ class WalletIntelligence:
                 w.archetype = intent
                 w.confidence = round(min(0.95, 0.3 + stats["n_trades"] * 0.05), 3)
                 w.metrics = {
+                    "pool_creation_times": creation_times,
+                    "early_entry_ratio": early_ratio,
+                    "early_entry_evidence_count": known_entries,
+                    "avg_exit_improvement_pct": stats["avg_exit_improvement_pct"],
                     "realized_pnl_pct": round(stats["realized_pnl_pct"], 2),
                     "win_rate": round(stats["win_rate"], 3), "n_trades": stats["n_trades"],
+                    "resolved_trades": stats["resolved_trades"],
+                    "resolved_positions": stats["resolved_positions"],
+                    "position_win_rate": round(stats["position_win_rate"], 3),
+                    "history_qualified": history_qualified,
+                    "inactivity_days": inactivity_days,
+                    "last_qualifying_activity": last_activity.isoformat() if last_activity else None,
                     "avg_size_usd": round(stats["avg_trade_size_usd"], 2),
                     "total_in_usd": round(stats["total_in"], 2), "total_out_usd": round(stats["total_out"], 2),
                     "max_drawdown_pct": stats["max_drawdown_pct"], "last_intent": intent,

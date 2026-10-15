@@ -56,6 +56,25 @@ def load_position(pid):
         return db.get(PaperPosition, pid)
 
 
+@pytest.mark.parametrize("approved", [True, False])
+def test_safe_mode_requires_explicit_asset_and_full_evidence(entry, monkeypatch, approved):
+    from app.config import get_settings
+    with session_scope() as db:
+        token = db.get(Token, entry["token_id"])
+        asset = f"solana:{token.address}"
+        opportunity = db.get(Opportunity, entry["opportunity_id"])
+        opportunity.decision, opportunity.score = "BUY", 95
+        opportunity.features = {"liq": 2_000_000}
+        opportunity.gate_results = {"passed": True, "safety": "PASS"}
+    monkeypatch.setattr(get_settings(), "safe_mode_assets", asset if approved else "")
+    EmergencyLayer().set_state("safe")
+    if approved:
+        assert PaperExecution().open_position(**entry) > 0
+    else:
+        with pytest.raises(ValueError, match="safe mode"):
+            PaperExecution().open_position(**entry)
+
+
 @pytest.mark.parametrize("change", ["paused", "emergency", "safe", "account", "missing"])
 def test_entry_rechecks_bot_control_after_fill_calculation(entry, monkeypatch, change):
     executor = PaperExecution()
@@ -164,3 +183,19 @@ def test_legacy_position_can_exit_during_emergency_without_fabricated_context(en
         assert trade.regime == learned.regime == "unknown"
         assert "entry_score" not in learned.features
         assert db.get(PaperPosition, pos.id).status == "closed"
+
+
+@pytest.mark.parametrize("trigger", ["regime_crash", "liquidity_collapse", "security_downgrade", "cluster_distribution"])
+def test_smart_exit_closes_from_fresh_quote_and_learns_once(entry, trigger):
+    pos = load_position(PaperExecution().open_position(**entry))
+    EmergencyLayer().set_state("paused")
+    flags = {} if trigger == "regime_crash" else {trigger: True}
+    regime = "crash" if trigger == "regime_crash" else "sideways"
+    pm = PositionManager()
+    result = pm.check_exits(pos, pos.avg_entry, regime, entry["pool_depth"], **flags)
+    assert result["action"] == "close_all"
+    assert result["reason"] == trigger
+    assert pm.check_exits(pos, pos.avg_entry, regime, entry["pool_depth"], **flags)["action"] == "none"
+    with session_scope() as db:
+        trade = db.query(PaperTrade).filter_by(position_id=pos.id).one()
+        assert db.query(LearningEvent).filter_by(source_type="trade", source_id=str(trade.id)).count() == 1

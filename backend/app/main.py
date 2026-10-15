@@ -385,6 +385,12 @@ def strategies(uid: int = Depends(user_id_from_request)):
         } for s in rows]}
 
 
+@app.get("/research/forward")
+def forward_research(uid: int = Depends(user_id_from_request)):
+    from .forward_study import summary
+    return summary()
+
+
 @app.get("/system/health")
 def system_health(uid: int = Depends(user_id_from_request)):
     with session_scope() as db:
@@ -442,7 +448,7 @@ async def _worker_cycle(pipeline: AlphaHunterPipeline) -> dict[str, Any]:
     result: dict[str, Any] = {"scan": None, "monitor": None, "errors": []}
     state = await asyncio.to_thread(EmergencyLayer().get_state)
     async def run_scan():
-        if state["status"] not in ("running", "safe") or state["emergency"].get("active"):
+        if (state["status"] not in ("running", "safe") or state["emergency"].get("active")) and not pipeline.s.collector_enabled:
             return
         try:
             # Do not wrap synchronous work in wait_for(): cancellation only stops
@@ -463,15 +469,10 @@ async def _worker_cycle(pipeline: AlphaHunterPipeline) -> dict[str, Any]:
             result["errors"].append(f"monitor: {type(exc).__name__}: {exc}")
             _log.exception("paper worker monitoring failed")
 
-    scan_task = asyncio.create_task(run_scan(), name="alphahunter-scan-cycle")
-    monitor_task = asyncio.create_task(run_monitor(), name="alphahunter-position-monitor")
-    try:
-        result["scan"], result["monitor"] = await asyncio.gather(scan_task, monitor_task)
-    finally:
-        for task in (scan_task, monitor_task):
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(scan_task, monitor_task, return_exceptions=True)
+    # Monitoring owns first use of the shared quota and SQLite writer. A scan
+    # failure is isolated below and cannot undo this already-completed pass.
+    result["monitor"] = await run_monitor()
+    result["scan"] = await run_scan()
     return result
 
 

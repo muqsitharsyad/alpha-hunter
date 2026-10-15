@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+from dataclasses import asdict
 from typing import Any
 
 from .config import get_settings
@@ -243,7 +244,17 @@ class DecisionEngine:
                 features={"pool": p.pool_address, "price": p.price_usd, "liq": p.liquidity_usd,
                           "vol24": p.volume_24h_usd, "age_hours": p.age_hours,
                           "price_change_h24": p.price_change_h24, "whale_value_usd": whale_value_usd,
-                          "our_size_notional": feas.details.get("our_size", 0)},
+                          "our_size_notional": feas.details.get("our_size", 0),
+                          "input_snapshot": json.loads(json.dumps({
+                              "pool": asdict(p),
+                              "token_evidence": asdict(meta) if meta else None,
+                              "swaps": [asdict(w) for w in candidate.get("whale_swaps", [])],
+                              "wallet_tiers": candidate.get("wallet_tiers", []),
+                              "safety": candidate.get("safety"),
+                              "consensus": candidate.get("consensus"),
+                              "captured_at": _now().isoformat(),
+                              "timestamp_policy": "retrieval timestamps are not verified source timestamps",
+                          }, default=str))},
                 regime=regime, strategy_version=strategy, feature_hash=feature_hash,
             )
             db.add(opp)

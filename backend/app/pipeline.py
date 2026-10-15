@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import datetime as dt
 import math
-from collections import defaultdict
+import time
+from collections import OrderedDict, defaultdict, deque
 from typing import Any
 
 from .config import get_settings
@@ -12,7 +13,7 @@ from .db import session_scope
 from .decision_engine import DecisionEngine
 from .execution import EmergencyLayer, PaperExecution, PositionManager, sync_account
 from .models import (
-    PaperAccount, PaperPosition, PaperTrade, ProviderHealth, SignalQuality, Token,
+    Market, MarketSnapshot, PaperAccount, PaperPosition, PaperTrade, ProviderHealth, SignalQuality, Token,
 )
 from .providers.base import PoolSnapshot, SwapEvent, get_adapters
 from .regime import RegimeEngine
@@ -50,6 +51,129 @@ class AlphaHunterPipeline:
         self.risk = RiskEngine()
         self.emergency = EmergencyLayer()
         self.safeties = EmergencySafeties()
+        self._pool_queue: OrderedDict[tuple[str, str], dict[str, Any]] = OrderedDict()
+        self._discovery_cursor = 0
+        self._discovery_due: dict[tuple[str, str], float] = {}
+        self._scan_requests: deque[float] = deque()
+
+    def _reserve_scan_request(self, open_positions: int = 0) -> bool:
+        """Reserve worst-case request + retry without spending monitoring's quota.
+
+        The HTTP limiter remains authoritative, including manual API calls. Its
+        current rolling usage and cooldown are checked before attempting work.
+        Local reservations additionally bound repeated cycles and cache hits.
+        """
+        if getattr(self.adapters.market, "name", "") != "geckoterminal":
+            return True
+        from .providers.free import _HTTP
+
+        now = time.monotonic()
+        while self._scan_requests and self._scan_requests[0] <= now - 60:
+            self._scan_requests.popleft()
+        reserve = max(self.s.collector_monitor_reserve, 2 * open_positions)
+        limit = min(self.s.collector_gt_calls_per_min, _HTTP.LIMITS["geckoterminal"])
+        cost = 2  # a transient failure can make the adapter retry once
+        with _HTTP._lock:
+            used = sum(t > now - 60 for t in _HTTP._requests.get("geckoterminal", ()))
+            cooldown = _HTTP._cooldown.get("geckoterminal", 0)
+        if now < cooldown or used + len(self._scan_requests) + cost + reserve > limit:
+            return False
+        self._scan_requests.extend([now] * cost)
+        return True
+
+    @staticmethod
+    def _quota_deferred(exc: Exception) -> bool:
+        """Quota is scheduled work, not a market outage."""
+        text = str(exc).lower()
+        return any(x in text for x in ("budget exhausted", "cooldown", "http 429", "quota"))
+
+    def _persist_pool(self, pool: PoolSnapshot) -> bool:
+        """Persist an observation without replacing its source timestamp with now."""
+        if (pool.source_ts is None or not math.isfinite(pool.price_usd) or pool.price_usd <= 0
+                or not math.isfinite(pool.liquidity_usd) or pool.liquidity_usd < 0):
+            return False
+        provider = getattr(self.adapters.market, "name", type(self.adapters.market).__name__)
+        venue = f"{provider}:{pool.chain}"
+        # Pool address, rather than ticker, distinguishes duplicate token symbols.
+        with session_scope() as db:
+            token = db.query(Token).filter_by(chain=pool.chain, address=pool.token_address).first()
+            if token is None:
+                token = Token(chain=pool.chain, address=pool.token_address,
+                              symbol=pool.symbol, name=pool.name)
+                db.add(token)
+            token.metadata_json = {**(token.metadata_json or {}),
+                                   "pool_address": pool.pool_address,
+                                   "market_provenance": {"provider": provider, "chain": pool.chain,
+                                                         "pool_address": pool.pool_address,
+                                                         "source_ts": _aware(pool.source_ts).isoformat()}}
+            market = db.query(Market).filter_by(venue=venue, symbol=pool.pool_address).first()
+            if market is None:
+                market = Market(venue=venue, symbol=pool.pool_address, base_asset=pool.token_address,
+                                quote_asset="USD", market_type="dex_pool", chain=pool.chain)
+                db.add(market)
+                db.flush()
+            duplicate = db.query(MarketSnapshot.id).filter_by(
+                market_id=market.id, source_ts=pool.source_ts).first()
+            if duplicate:
+                return False
+            db.add(MarketSnapshot(market_id=market.id, price=pool.price_usd,
+                                  volume_24h=pool.volume_24h_usd, liquidity_usd=pool.liquidity_usd,
+                                  source_ts=pool.source_ts, ingested_ts=_now()))
+        return True
+
+    def _scheduled_candidates(self, chains: list[str], open_positions: int,
+                              result: dict[str, Any]) -> list[dict[str, Any]]:
+        """Rotate discovery across chains/feeds, then rotate pools across cycles."""
+        feeds = [(chain, kind) for chain in dict.fromkeys(chains)
+                 for kind in ("trending", "new")
+                 if (self.s.max_pools_per_scan if kind == "trending" else self.s.new_pools_per_scan) > 0]
+        real = getattr(self.adapters.market, "name", "") == "geckoterminal"
+        # At most one discovery request per real cycle leaves room for swap work.
+        for _ in range(len(feeds)):
+            key = feeds[self._discovery_cursor % len(feeds)]
+            if real and time.monotonic() < self._discovery_due.get(key, 0):
+                self._discovery_cursor += 1
+                continue
+            if not self._reserve_scan_request(open_positions):
+                result["deferred"] += 1
+                break
+            self._discovery_cursor += 1
+            chain, kind = key
+            try:
+                fetch = self.adapters.market.trending_pools if kind == "trending" else self.adapters.market.new_pools
+                limit = self.s.max_pools_per_scan if kind == "trending" else self.s.new_pools_per_scan
+                pools = fetch(chain, limit)
+                self._discovery_due[key] = time.monotonic() + self.s.trending_scan_interval_s
+                for pool in pools:
+                    if pool.chain != chain or not pool.pool_address or not pool.token_address:
+                        continue
+                    result["snapshots_persisted"] += int(self._persist_pool(pool))
+                for cand in self.scanner.candidates_from_trending(pools, chain):
+                    pool = cand["pool"]
+                    if pool and pool.chain == chain and pool.token_address and pool.pool_address:
+                        self._pool_queue[(chain, pool.pool_address)] = {**cand, "chain": chain}
+            except Exception as exc:
+                if self._quota_deferred(exc):
+                    result["deferred"] += 1
+                else:
+                    result["errors"].append(f"market scan {chain}: {exc}")
+            if real:
+                break
+        # Preserve order even while observations are stale: refreshing a feed must
+        # not put its first-ranked pools ahead of pools still awaiting service.
+        for key in list(self._pool_queue):
+            if key[0] not in chains:
+                del self._pool_queue[key]
+        selected: list[dict[str, Any]] = []
+        fresh = [key for key, cand in self._pool_queue.items()
+                 if _fresh_pool(cand["pool"], self.s.ttl_pool_s)]
+        for key in fresh:
+            if not self._reserve_scan_request(open_positions):
+                result["deferred"] += len(fresh) - len(selected)
+                break
+            selected.append(self._pool_queue[key])
+            self._pool_queue.move_to_end(key)
+        return selected
 
     # ------------------------------------------------------------------ regime
     def current_regime(self) -> tuple[str, dict[str, float], dt.datetime]:
@@ -106,8 +230,10 @@ class AlphaHunterPipeline:
         state = self.emergency.get_state()
         running = state["status"] in ("running", "safe") and not state["emergency"].get("active")
 
+        collector_only = not running
         regime, features, ts = self.current_regime()
         result = {
+            "collector_only": collector_only, "snapshots_persisted": 0, "deferred": 0,
             "regime": regime, "features": features, "pools_scanned": 0,
             "wallet_events_ingested": 0, "opportunities_evaluated": 0,
             "buys": 0, "watches": 0, "skipped_held": 0, "errors": [],
@@ -126,39 +252,27 @@ class AlphaHunterPipeline:
         # ---- pass 1: scan pools, collect torn candidates + per-wallet swaps
         collected: list[dict[str, Any]] = []
         wallet_swaps: dict[tuple[str, str], list[SwapEvent]] = defaultdict(list)
-        seen_pools: set[tuple[str, str]] = set()
-        for chain in chains:
+        for cand in self._scheduled_candidates(chains, len(open_positions), result):
+            chain, pool = cand["chain"], cand["pool"]
+            result["pools_scanned"] += 1
             try:
-                pools = self.adapters.market.trending_pools(chain, s.max_pools_per_scan)
-                if s.new_pools_per_scan:
-                    pools += self.adapters.market.new_pools(chain, s.new_pools_per_scan)
-            except Exception as e:  # noqa: BLE001
-                result["errors"].append(f"market scan {chain}: {e}")
-                continue
-
-            for cand in self.scanner.candidates_from_trending(pools, chain):
-                pool = cand["pool"]
-                if not pool or not pool.token_address or (chain, pool.pool_address) in seen_pools:
+                swaps = self.adapters.chain.recent_swaps_for_chain(
+                    chain, pool.pool_address,
+                    min_usd=max(50.0, s.min_whale_trade_usd / 5), limit=120)
+                whale_swaps = [x for x in swaps if x.value_usd >= s.min_whale_trade_usd
+                               and x.chain == chain and x.pool_address == pool.pool_address
+                               and x.token_address == pool.token_address]
+                if not whale_swaps:
                     continue
-                seen_pools.add((chain, pool.pool_address))
-                result["pools_scanned"] += 1
-                try:
-                    swaps = self.adapters.chain.recent_swaps_for_chain(
-                        chain, pool.pool_address,
-                        min_usd=max(50.0, s.min_whale_trade_usd / 5), limit=120)
-                    if not swaps:
-                        continue
-                    whale_swaps = [x for x in swaps if x.value_usd >= s.min_whale_trade_usd
-                                   and x.chain == chain and x.pool_address == pool.pool_address
-                                   and x.token_address == pool.token_address]
-                    if not whale_swaps:
-                        continue
-                    self.wallets.record_swaps(chain, pool, whale_swaps)
-                    for w in whale_swaps:
-                        wallet_swaps[(chain, w.wallet)].append(w)
-                    collected.append({**cand, "chain": chain, "whale_swaps": whale_swaps})
-                except Exception as e:  # noqa: BLE001
-                    result["errors"].append(f"ingest {cand['pool'].symbol}: {type(e).__name__}: {e}")
+                self.wallets.record_swaps(chain, pool, whale_swaps)
+                for w in whale_swaps:
+                    wallet_swaps[(chain, w.wallet)].append(w)
+                collected.append({**cand, "whale_swaps": whale_swaps})
+            except Exception as e:  # noqa: BLE001
+                if self._quota_deferred(e):
+                    result["deferred"] += 1
+                else:
+                    result["errors"].append(f"ingest {pool.symbol}: {type(e).__name__}: {e}")
 
         # ---- pass 2: wallet intelligence (global ledger across pools)
         wallet_tiers: dict[tuple[str, str], str] = {}
@@ -173,7 +287,7 @@ class AlphaHunterPipeline:
         result["wallet_events_ingested"] = sum(len(v) for v in wallet_swaps.values())
 
         # ---- pass 3: evaluate + execute
-        for cand in collected:
+        for cand in collected if not collector_only else []:
             pool = cand["pool"]
             try:
                 evt = self._evaluate(cand, regime, regime_cop, account,
@@ -198,6 +312,9 @@ class AlphaHunterPipeline:
                         whale_swaps=evt.get("whale_swaps"))
                     result["buys"] += 1
                     result["new_positions"].append({"id": pos_id, "symbol": pool.symbol})
+                    from .notify import notify
+                    notify("entry", f"{pool.symbol}: paper position #{pos_id} opened; "
+                                    f"intended notional ${evt['notional']:,.2f}; simulated fill, not a market order")
                     account_row = self._reload_account(account_row.id)
                     open_positions = self._load_positions(account_row.id)
                     account = self._account_dict(account_row, open_positions, user_settings)
@@ -272,6 +389,8 @@ class AlphaHunterPipeline:
         evt["token_id"] = self._token_id(cand["chain"], pool.token_address)
         evt["whale_swaps"] = whale_swaps
         evt["strategy_version"] = "whale_copy@1.0.0"
+        from .forward_study import record
+        record(cand, evt, wallet_tiers, self.adapters.market.name)
 
         # PRD 8.1 forward hit-rate: record every followed-wallet signal, traded or not
         if consensus.get("min_wallets_met"):
@@ -288,12 +407,8 @@ class AlphaHunterPipeline:
 
             notify("convergence", f"{pool.symbol}: {consensus['buyers']} wallets buying within "
                                   f"{consensus['window_minutes']}m (net ${consensus['net_flow_usd']:,.0f})")
-        if evt["decision"] == "BUY":
-            from .notify import notify
-
-            notify("entry", f"{pool.symbol} BUY score {evt['composite']:.0f}, "
-                            f"size ${evt.get('notional', 0):,.0f}, slip "
-                            f"{getattr(evt['feasibility'], 'slippage_bps', 0):.0f}bps")
+        # Entry notifications belong to the committed execution path, not an
+        # intent that may be vetoed by a concurrent pause or risk change.
         return evt
 
     def _record_signal_quality(self, chain: str, token_address: str, entry_price: float,
@@ -350,12 +465,23 @@ class AlphaHunterPipeline:
                     continue
                 price = pool.price_usd
                 self._resolve_signal_quality(pos.token_id, price)
-                out = self.pos_mgr.check_exits(pos, price, regime, pool.liquidity_usd)
+                entry_depth = ((pos.trailing_state or {}).get("entry_context") or {}).get("pool_depth", 0)
+                collapse = (isinstance(entry_depth, (int, float)) and math.isfinite(entry_depth)
+                            and entry_depth > 0 and pool.liquidity_usd <= entry_depth * 0.30)
+                exit_flags = {"liquidity_collapse": True} if collapse else {}
+                exit_flags.update({key: value for key, value in self._position_exit_evidence(pos, pool).items() if value})
+                out = self.pos_mgr.check_exits(pos, price, regime, pool.liquidity_usd, **exit_flags)
                 if out["action"] not in ("hold", "none"):
                     closes.append({"position_id": pos.id, "symbol": pos.symbol,
                                    "reason": out["reason"], "pnl": out.get("pnl", 0.0)})
             self._sync_account_equity(state["account_id"], positions)
-        self._resolve_pending_signals()
+        self._resolve_pending_signals(len(positions))
+        from .forward_study import resolve_due
+        def fetch_outcome(chain, address):
+            if not self._reserve_scan_request(len(positions)):
+                return None
+            return self.adapters.market.pool_snapshot(chain, address)
+        resolve_due(fetch_outcome, limit=2)
         if stale_risk and not state["emergency"].get("active"):
             self.emergency.raise_emergency([{"type": "stale_position_quote", "severity": "critical",
                                              "detail": "Open paper position cannot be priced; entries halted, no synthetic exit"}],
@@ -363,7 +489,37 @@ class AlphaHunterPipeline:
         return {"positions": len(positions), "closes": closes, "regime": regime,
                 "stale_positions": stale_positions}
 
+    def _position_exit_evidence(self, pos: PaperPosition, pool: PoolSnapshot) -> dict[str, bool]:
+        """Only positive current evidence triggers an exit; UNKNOWN is not REJECT."""
+        from .models import Wallet, WalletTransaction
+        now = _now()
+        with session_scope() as db:
+            tok = db.get(Token, pos.token_id)
+            address = tok.address if tok else None
+            rows = db.query(WalletTransaction, Wallet).join(Wallet).filter(
+                WalletTransaction.token_id == pos.token_id,
+                WalletTransaction.chain == pos.chain,
+                WalletTransaction.timestamp >= now - dt.timedelta(minutes=30),
+                WalletTransaction.timestamp <= now, Wallet.tier.in_(["S", "A"])).all()
+            qualified = [(tx, wallet) for tx, wallet in rows
+                         if (wallet.metrics or {}).get("history_qualified") is True]
+        sellers = {wallet.id for tx, wallet in qualified if tx.side == "sell"}
+        net = sum(tx.value_usd * (1 if tx.side == "buy" else -1) for tx, _ in qualified)
+        reject = False
+        if address:
+            try:
+                meta = self.adapters.token.token_meta(pos.chain, address, pool.pool_address)
+                reject = self.safety.check(meta, pool)["summary"] == "REJECT"
+            except Exception:
+                pass  # No invented security downgrade on provider failure.
+        return {"security_downgrade": reject,
+                "cluster_distribution": len(sellers) >= 2 and net < 0}
+
     def _pool_addr(self, pos: PaperPosition) -> str:
+        context = ((pos.trailing_state or {}).get("entry_context") or {})
+        entry_pool = (context.get("features") or {}).get("pool")
+        if entry_pool:
+            return entry_pool
         with session_scope() as db:
             tok = db.query(Token).filter(Token.id == pos.token_id).first()
             if tok and tok.metadata_json:
@@ -390,7 +546,7 @@ class AlphaHunterPipeline:
                 r.resolved = True
                 r.resolved_at = now
 
-    def _resolve_pending_signals(self) -> None:
+    def _resolve_pending_signals(self, open_positions: int = 0) -> None:
         """Price mature paper signals even when they never became open positions."""
         with session_scope() as db:
             pending = db.query(SignalQuality).filter_by(resolved=False).order_by(
@@ -403,6 +559,8 @@ class AlphaHunterPipeline:
             pool_address = metadata.get("pool_address")
             if not pool_address:
                 continue
+            if not self._reserve_scan_request(open_positions):
+                break
             try:
                 pool = self.adapters.market.pool_snapshot(chain, pool_address)
                 if pool is not None and _fresh_pool(pool, self.s.ttl_pool_s):

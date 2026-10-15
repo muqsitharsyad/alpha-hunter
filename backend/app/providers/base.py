@@ -15,6 +15,10 @@ class ProviderError(RuntimeError):
     pass
 
 
+class ProviderDeferred(ProviderError):
+    """Local quota/cooldown prevented a request; not an upstream failure."""
+
+
 class StaleDataError(ProviderError):
     """Raised when a decision-critical feed is older than its TTL (PRD 15.2 hard gate)."""
 
@@ -138,6 +142,10 @@ HEALTH = _HealthRegistry()
 
 def record_call(provider: str, ok: bool, latency_ms: float) -> None:
     HEALTH.record(provider, ok, latency_ms)
+    from ..db import session_scope
+    from ..models import ProviderCall
+    with session_scope() as db:
+        db.add(ProviderCall(provider=provider, ok=ok, latency_ms=latency_ms))
 
 
 # --- interfaces -------------------------------------------------------------
@@ -218,11 +226,12 @@ class AdapterRegistry:
             self.token = DemoTokenMetadata()
             self.social = None
             return self
-        from .free import GeckoTerminalMarket, GeckoTerminalSwaps, DexScreenerTokenMeta
+        from .free import GeckoTerminalMarket, GeckoTerminalSwaps
+        from .security import GoPlusTokenSecurity
 
         self.chain = GeckoTerminalSwaps()
         self.market = GeckoTerminalMarket()
-        self.token = DexScreenerTokenMeta()
+        self.token = GoPlusTokenSecurity()
         self.social = None
         return self
 

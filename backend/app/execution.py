@@ -14,7 +14,7 @@ from sqlalchemy.orm.attributes import set_committed_value
 from .config import get_settings
 from .db import session_scope
 from .models import (
-    AuditLog, BotState, LearningEvent, Opportunity, PaperAccount, PaperOrder, PaperPosition, PaperTrade, RiskEvent,
+    AuditLog, BotState, LearningEvent, Opportunity, PaperAccount, PaperOrder, PaperPosition, PaperTrade, RiskEvent, Token,
 )
 
 
@@ -92,11 +92,24 @@ class PaperExecution:
             # SQLite's writer reservation and PostgreSQL's singleton row lock
             # serialize this check with control changes until the fill commits.
             state = db.query(BotState).filter_by(id=1).with_for_update().first()
-            if (state is None or state.status != "running" or state.safe_mode
+            if (state is None or state.status not in {"running", "safe"}
                     or state.account_id != account_id):
                 raise ValueError("bot is not running for this paper account")
             if (state.emergency or {}).get("active"):
                 raise ValueError("bot emergency blocks new paper entries")
+            opportunity = db.get(Opportunity, opportunity_id)
+            if state.status == "safe" or state.safe_mode:
+                token = db.get(Token, token_id)
+                approved = {asset.strip() for asset in get_settings().safe_mode_assets.split(",") if asset.strip()}
+                gates = opportunity.gate_results if opportunity else {}
+                liquidity = (opportunity.features or {}).get("liq", 0) if opportunity else 0
+                if (token is None or f"{chain}:{token.address}" not in approved
+                        or opportunity is None or opportunity.token_id != token_id
+                        or opportunity.decision != "BUY" or opportunity.score < 90
+                        or gates.get("passed") is not True or gates.get("safety") != "PASS"
+                        or not isinstance(liquidity, (int, float)) or not math.isfinite(liquidity)
+                        or liquidity < 1_000_000):
+                    raise ValueError("bot safe mode requires approved liquid asset and strongest qualified signal")
             account = db.query(PaperAccount).filter_by(id=account_id).with_for_update().first()
             if account is None or account.status != "active":
                 raise ValueError("paper account unavailable")
@@ -104,10 +117,9 @@ class PaperExecution:
                 account_id=account_id, status="open").all())
             if not math.isfinite(account.equity) or total_cost > account.equity - committed:
                 raise ValueError("insufficient paper cash/equity")
-            opportunity = db.get(Opportunity, opportunity_id)
             # Position JSON owns the immutable entry snapshot; never reconstruct
             # new trades from a subsequently re-evaluated opportunity.
-            entry_context = {"regime": regime,
+            entry_context = {"regime": regime, "pool_depth": pool_depth,
                              "features": deepcopy(opportunity.features or {}) if opportunity else {}}
             pos = PaperPosition(
                 account_id=account_id, token_id=token_id, chain=chain, symbol=symbol,
@@ -325,11 +337,24 @@ class PositionManager:
 
     _close_all = close_all
 
-    def check_exits(self, pos: PaperPosition, price: float, regime: str = "sideways", pool_depth: float | None = None) -> dict[str, Any]:
+    def check_exits(self, pos: PaperPosition, price: float, regime: str = "sideways", pool_depth: float | None = None,
+                    *, liquidity_collapse: bool = False, security_downgrade: bool = False,
+                    cluster_distribution: bool = False) -> dict[str, Any]:
         _positive("price", price)
         _positive("pool depth", pool_depth or 0.0)
         with _position_transaction(pos) as (db, current):
-            result = self._check_exits(db, current, price, pool_depth)
+            triggers = self.smart_exit_triggers(current, liquidity_collapse=liquidity_collapse,
+                                                security_downgrade=security_downgrade,
+                                                cluster_distribution=cluster_distribution,
+                                                regime_crash=regime == "crash")
+            if current.status == "open" and current.qty_open > 0 and triggers:
+                self._mark(current, price, _now())
+                reason = triggers[0]
+                pnl = self._exit(db, current, current.qty_open, price, pool_depth, reason)
+                result = {"action": "close_all", "reason": reason, "pnl": pnl,
+                          "triggers": triggers}
+            else:
+                result = self._check_exits(db, current, price, pool_depth)
         return result
 
     def _check_exits(self, db, pos: PaperPosition, price: float, pool_depth: float) -> dict[str, Any]:

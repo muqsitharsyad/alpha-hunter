@@ -2,4 +2,6 @@
 # Credentials and runtime settings remain in the server's protected environment.
 services:
   alphahunter:
-    image: alphahunter:1.0.6-functional-safety
+    image: alphahunter:1.0.8-observation
+    environment:
+      COLLECTOR_ENABLED: "true"

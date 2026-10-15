@@ -13,7 +13,7 @@ from urllib.parse import quote
 import httpx
 
 from ..config import get_settings
-from .base import PriceBar, PoolSnapshot, ProviderError, SwapEvent, TokenMeta, record_call
+from .base import PriceBar, PoolSnapshot, ProviderError, ProviderDeferred, SwapEvent, TokenMeta, TokenMetadataProvider, record_call
 
 _BASE_URLS = {"binance": "https://api.binance.com"}
 GT_CHAIN_TAG = {"solana": "solana", "ethereum": "eth", "bsc": "bsc", "base": "base"}
@@ -43,7 +43,7 @@ class _Http:
     Use 8/min, including retries. Multi-process deployments need a shared limiter.
     """
 
-    LIMITS = {"geckoterminal": 8, "dexscreener": 60, "binance": 60}
+    LIMITS = {"goplus": 8, "geckoterminal": 8, "dexscreener": 60, "binance": 60}
 
     def __init__(self) -> None:
         self._client: httpx.Client | None = None
@@ -67,9 +67,9 @@ class _Http:
             while calls and calls[0] <= now - 60:
                 calls.popleft()
             if now < self._cooldown.get(provider, 0):
-                raise ProviderError(f"{provider}: rate-limit cooldown active")
+                raise ProviderDeferred(f"{provider}: rate-limit cooldown active")
             if len(calls) >= self.LIMITS.get(provider, 8):
-                raise ProviderError(f"{provider}: free request budget exhausted")
+                raise ProviderDeferred(f"{provider}: free request budget exhausted")
             calls.append(now)
 
     def get_json(self, provider: str, url: str, **kw: Any) -> Any:
@@ -104,6 +104,8 @@ class _Http:
                     if not transient or attempt == 1:
                         raise ProviderError(f"{provider}: {type(exc).__name__}") from exc
                     time.sleep(0.25)
+        except ProviderDeferred:
+            raise
         except (ProviderError, ValueError) as exc:
             record_call(provider, False, (time.monotonic() - t0) * 1000)
             raise ProviderError(str(exc)) from exc
@@ -294,7 +296,7 @@ class GeckoTerminalSwaps:
         return out
 
 
-class DexScreenerTokenMeta:
+class DexScreenerTokenMeta(TokenMetadataProvider):
     """Identity/marketing metadata only; holder/security fields are unavailable."""
 
     name = "dexscreener"

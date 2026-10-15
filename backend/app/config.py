@@ -81,7 +81,14 @@ class Settings(BaseSettings):
     daily_loss_cap_pct: float = 5.0
     max_drawdown_cap_pct: float = 20.0
     max_positions: int = 5
+    # Explicit chain:token-address allowlist; empty blocks safe-mode entries.
+    safe_mode_assets: str = ""
     data_cost_budget_usd_per_day: float = 0.0
+
+    # Collection never enables entries or changes the persisted bot state.
+    collector_enabled: bool = False
+    collector_gt_calls_per_min: int = Field(default=8, ge=1, le=8)
+    collector_monitor_reserve: int = Field(default=2, ge=0, le=8)
 
     # --- scan universe (cost guardrail: shrink these to spend less) ---
     chains: str = "solana"

@@ -474,6 +474,25 @@ class SignalQuality(Base):
     resolved_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class ForwardObservation(Base):
+    """Frozen detection cohort; missing outcomes remain in the denominator."""
+    __tablename__ = "forward_observations"
+    __table_args__ = (UniqueConstraint("opportunity_id", "wallet_id", name="uq_forward_cohort"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    opportunity_id: Mapped[int] = mapped_column(ForeignKey("opportunities.id"), index=True)
+    wallet_id: Mapped[int] = mapped_column(ForeignKey("wallets.id"))
+    token_id: Mapped[int] = mapped_column(ForeignKey("tokens.id"))
+    detected_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    due_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    next_attempt_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    # Immutable input snapshot includes observed price, whale price separately,
+    # qualification, model/cost version and timestamp provenance limitations.
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    outcome: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    resolved_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class AiMemory(Base):
     """PRD 21 - wallet/token/market/strategy/pattern/incident memory."""
 

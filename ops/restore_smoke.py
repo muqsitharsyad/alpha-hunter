@@ -36,6 +36,8 @@ try:
 from fastapi.testclient import TestClient
 from app.main import app
 from app.config import get_settings
+from app.db import init_db
+init_db()
 c=sqlite3.connect('/data/alphahunter.db'); assert c.execute('pragma integrity_check').fetchone()[0]=='ok'
 names=['paper_accounts','paper_positions','paper_trades','opportunities','wallets']
 counts={n:c.execute('select count(*) from '+n).fetchone()[0] for n in names}
