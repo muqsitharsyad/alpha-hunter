@@ -39,7 +39,7 @@
 **Current state:** local shell remains without Docker, but the Docker-capable home server built and deployed the ledger batch on 2026-10-08 11:29 WIB. The image is healthy and external private dashboard/API checks pass. A separate isolated clean SQLite-volume smoke remains required before this acceptance task closes.
 
 **Acceptance**
-- [ ] Fresh standalone image is smoke-tested with an isolated SQLite volume.
+- [x] Fresh standalone image smoke and online-backup restore both passed on isolated SQLite volumes on 2026-10-15; eight UI routes, API 401, paper-only and integrity checked. See `docs/ACCEPTANCE_2026-10-15.md`.
 - [x] Image digest, runtime user, health route, and rollback location are recorded without secrets.
 - [x] Production deploy happened after Tasks 1–3 passed; a new 24-hour acceptance observation started at 2026-10-08 11:29 WIB.
 
@@ -54,5 +54,6 @@
 
 ## Time-gated operations
 
-- [ ] UI/ledger release 24-hour infrastructure soak started 2026-10-08 14:01 WIB as `alphahunter-soak-24h-ui-20261008T070152Z`; its finalizer is due around 2026-10-09 14:04 WIB. The earlier ledger soak was deliberately stopped because this release replaced its image. Only a final `PASS` chains the 7-day soak automatically.
+- [x] UI/ledger release 24-hour infrastructure soak passed 2026-10-09: 1440 samples, zero failures. Report inspected 2026-10-15.
+- [ ] Chained seven-day observation failed/interrupted by host reboot: 5901 samples, 66 failures, no completion marker. Durable calendar scheduling deployed and short-drill verified. Fresh observer `alphahunter-soak-durable-20261015T071546Z` is running until 2026-10-22 ~14:18 WIB. This is infrastructure evidence only.
 - [ ] The 7-day report and Phase 0.5 result cannot be marked complete before actual elapsed time and data exist.

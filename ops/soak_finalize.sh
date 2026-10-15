@@ -70,15 +70,13 @@ status=PASS
 rm -f "$PID_FILE"
 printf 'result=%s status=%s samples=%s failures=%s\n' "$OUT_FILE" "$status" "$samples" "$failures"
 if [ "$status" = PASS ] && [ "$CHAIN_7D" = 1 ]; then
-  chain_stamp=$(date -u +%Y%m%dT%H%M%SZ)
-  next_log="$APP_DIR/ops/soak-7d-$chain_stamp.log"
-  next_report="$APP_DIR/ops/soak-7d-$chain_stamp.md"
-  monitor_unit="alphahunter-soak-7d-$chain_stamp"
-  finalizer_unit="alphahunter-soak-finalize-7d-$chain_stamp"
-  systemd-run --user --unit "$monitor_unit" --collect /bin/bash -lc \
-    "cd '$APP_DIR' && INTERVAL_S=60 ./ops/soak_monitor.sh 604800 '$next_log'"
-  systemd-run --user --unit "$finalizer_unit" --on-active=7d2min --collect /bin/bash -lc \
-    "cd '$APP_DIR' && PID_FILE='$APP_DIR/ops/soak.pid' CHAIN_7D=0 ./ops/soak_finalize.sh '$next_log' '$next_report'"
-  printf 'followup=7d monitor=%s.service finalizer=%s.timer log=%s\n' "$monitor_unit" "$finalizer_unit" "$next_log"
+  # Durable calendar timer survives reboot. Interrupted observations never resume
+  # into the same log and cannot be mistaken for uninterrupted acceptance.
+  if APP_DIR="$APP_DIR" INTERVAL_S=60 bash "$APP_DIR/ops/schedule_soak.sh" 604800 >> "$OUT_FILE" 2>&1; then
+    printf '\n- Followup: scheduled durable seven-day observation\n' >> "$OUT_FILE"
+  else
+    printf '\n- Followup: FAILED to schedule seven-day observation\n' >> "$OUT_FILE"
+    exit 5
+  fi
 fi
 [ "$status" = PASS ]
